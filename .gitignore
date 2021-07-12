@@ -17,9 +17,6 @@
 *.MOV
 *.avi
 
-# Datasets
-datasets/
-
 # Neural Network weights
 weights/
 *.weights
@@ -28,6 +25,8 @@ weights/
 *.onnx
 *.mlmodel
 *.torchscript
+
+.idea/
 
 # -------------- GitHub Python GitIgnore --------------
 # Byte-compiled / optimized / DLL files
