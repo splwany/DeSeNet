@@ -1,2 +1,2 @@
 # DeSeNet
-Real-time Object Detection &amp; Semantic Segmentation Network
+Real-time end-to-end network for Object Detection &amp; Semantic Segmentation

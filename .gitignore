@@ -1,3 +1,35 @@
+# ---------------- Customer GitIgnore ----------------
+# Repo-specific GitIgnore
+*.jpg
+*.jpeg
+*.png
+*.bmp
+*.tif
+*.tiff
+*.JPG
+*.JPEG
+*.PNG
+*.BMP
+*.TIF
+*.TIFF
+*.mp4
+*.mov
+*.MOV
+*.avi
+
+# Datasets
+datasets/
+
+# Neural Network weights
+weights/
+*.weights
+*.pt
+*.pth
+*.onnx
+*.mlmodel
+*.torchscript
+
+# -------------- GitHub Python GitIgnore --------------
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
