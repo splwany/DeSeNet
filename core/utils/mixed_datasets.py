@@ -57,7 +57,7 @@ def exif_size(img):
     s = img.size  # (width, height)
     try:
         rotation = img.getexif()[orientation]
-        if rotation in [6, 8]:
+        if rotation in [Image.ROTATE_90, Image.ROTATE_270]:
             s = (s[1], s[0])
     except:
         pass
@@ -65,8 +65,23 @@ def exif_size(img):
     return s
 
 
+def correct_rotation(img):
+    rotation_dict = {
+        8: Image.ROTATE_90,
+        3: Image.ROTATE_180,
+        6: Image.ROTATE_270
+    }
+    try:
+        rotation = img.getexif()[orientation]
+        if rotation in rotation_dict:
+            return img.transpose(rotation_dict[rotation])
+    except:
+        pass
+    return img
+
+
 def create_mixed_dataloader(path, imgsz, batch_size, stride, opt, hyp=None, augment=False, cache=False, pad=0.0, rect=False,
-                            rank=-1, world_size=1, workers=8, image_weights=False, quad=False, prefix=''):
+                            rank=-1, world_size=1, workers=8, image_weights=False, quad=False, prefix='', seed=0):
     # 确保 DDP 中的主进程先加载 dataset，这样其他进程可以使用其缓存
     with torch_distributed_zero_first(rank):
         dataset = LoadImagesAndLabels(path, imgsz, batch_size,
@@ -78,7 +93,8 @@ def create_mixed_dataloader(path, imgsz, batch_size, stride, opt, hyp=None, augm
                                       stride=int(stride),
                                       pad=pad,
                                       image_weights=image_weights,
-                                      prefix=prefix)
+                                      prefix=prefix,
+                                      seed=seed)
     
     batch_size = min(batch_size, len(dataset))
     cpu_count = os.cpu_count()
@@ -147,7 +163,7 @@ def img2label_paths(img_paths):
 
 class LoadImagesAndLabels(Dataset):  # for training/testing
     def __init__(self, path, img_size=640, batch_size=16, augment=False, hyp=None, rect=False, image_weights=False,
-                 cache_images=False, single_cls=False, stride=32, pad=0.0, prefix=''):
+                 cache_images=False, single_cls=False, stride=32, pad=0.0, prefix='', seed=0):
         self.img_size = img_size
         self.augment = augment
         self.hyp = hyp
@@ -200,8 +216,7 @@ class LoadImagesAndLabels(Dataset):  # for training/testing
         cache.pop('hash')  # 移除 hash
         cache.pop('version')  # 移除 version
         cache_items = list(cache.items())
-        # random.seed(random.random())
-        random.shuffle(cache_items)
+        random.seed(seed)
         random.shuffle(cache_items)
         self.img_files = [item[0] for item in cache_items]  # update
         cache_values = [item[1] for item in cache_items]
@@ -460,14 +475,17 @@ def load_image(self: LoadImagesAndLabels, index: int) -> Tuple[np.ndarray, Tuple
     assert isinstance(self.img_files, list)
     img_path = self.img_files[index]  # 图片路径
     
-    img = cv2.imread(img_path)  # BGR
-    assert img is not None, f'图片未找到：{img_path}'
-    h0, w0 = img.shape[:2]  # 原始 hw
-    r = self.img_size / max(h0, w0)  # 比例
+    assert os.path.isfile(img_path), f'图片未找到：{img_path}'
+    img = Image.open(img_path)  # RGB
+    img = correct_rotation(img)  # 图片旋转矫正
+    w0, h0 = img.size  # 原始 wh
+    assert img.size == tuple(self.shapes[index]), f'图片尺寸与缓存不符：{img_path}'
+    r = self.img_size / max(w0, h0)  # 比例
 
     if r != 1:  # 如果尺寸不一致
-        img = cv2.resize(img, (int(w0 * r), int(h0 * r)),
-                         interpolation=cv2.INTER_AREA if r < 1 and not self.augment else cv2.INTER_LINEAR)
+        new_wh = (int(w0 * r), int(h0 * r))
+        img = img.resize(new_wh, Image.ANTIALIAS)
+    img = cv2.cvtColor(np.asarray(img), cv2.COLOR_RGB2BGR)
     return img, (h0, w0), (img.shape[0], img.shape[1])
 
 
@@ -544,7 +562,8 @@ def load_mosaic(self: LoadImagesAndLabels, index):
                                                        translate=self.hyp['translate'],
                                                        scale=self.hyp['scale'],
                                                        shear=self.hyp['shear'],
-                                                       perspective=self.hyp['perspective'])
+                                                       perspective=self.hyp['perspective'],
+                                                       border=self.mosaic_border)
     return img4, det_labels4, seg_labels4
 
 

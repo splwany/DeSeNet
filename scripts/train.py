@@ -134,30 +134,32 @@ def train(hyp, opt, device, tb_writer=None):
     #     model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model).to(device)
     #     logger.info('Using SyncBatchNorm()')
 
-    # Trainloader
-    dataloader, dataset = create_mixed_dataloader(train_path, imgsz, batch_size, gs, opt,
-                                            hyp=hyp, augment=True, cache=opt.cache_images, rect=opt.rect, rank=rank,
-                                            world_size=opt.world_size, workers=opt.workers,
-                                            image_weights=opt.image_weights, quad=opt.quad, prefix=colorstr('train: '))
-    mlc = np.concatenate(dataset.det_labels, 0)[:, 0].max()  # max label class 标签中共有多少类
-    nb = len(dataloader)  # batch 总数
-    assert mlc < de_nc, f'标签类别数 {mlc} 超过 {opt.data} 中的 nc={de_nc}. nc 值的范围是 0-{de_nc - 1}'
+    for epoch in range(2):
+        # Trainloader
+        dataloader, dataset = create_mixed_dataloader(test_path, imgsz, batch_size, gs, opt,
+                                                hyp=hyp, augment=True, cache=opt.cache_images, rect=opt.rect, rank=rank,
+                                                world_size=opt.world_size, workers=opt.workers,
+                                                image_weights=opt.image_weights, quad=opt.quad, prefix=colorstr('train: '), seed=epoch)
+        mlc = np.concatenate(dataset.det_labels, 0)[:, 0].max()  # max label class 标签中共有多少类
+        nb = len(dataloader)  # batch 总数
+        assert mlc < de_nc, f'标签类别数 {mlc} 超过 {opt.data} 中的 nc={de_nc}. nc 值的范围是 0-{de_nc - 1}'
 
-    pbar = enumerate(dataloader)
-    if rank in [-1, 0]:
-        pbar = tqdm(pbar, total=nb)
-    for i, (imgs, det_labels, seg_labels, paths, _) in pbar:  # imgs.shape == torch.Size([16, 3, 640, 640])
-        out_imgs = imgs.permute(0, 2, 3, 1).numpy()
-        out_segs = seg_labels.numpy()
-        for out_img, out_seg, path in zip(out_imgs, out_segs, paths):
-            path_preffix = Path(path).stem
-            cv2.imwrite(f'runs/tmp/{path_preffix}.jpg', cv2.cvtColor(out_img, cv2.COLOR_BGR2RGB))
-            file_name = f'runs/tmp/{path_preffix}_label.png'
-            if (out_seg > 0).any() and out_seg.min() >= 0 and out_seg.max() < 255:
-                lbl_pil = Image.fromarray(out_seg.astype(np.uint8), mode="P")
-                colormap = imgviz.label_colormap()
-                lbl_pil.putpalette(colormap.flatten())
-                lbl_pil.save(file_name)
+        pbar = enumerate(dataloader)
+        if rank in [-1, 0]:
+            pbar = tqdm(pbar, total=nb)
+        for i, (imgs, det_labels, seg_labels, paths, _) in pbar:  # imgs.shape == torch.Size([16, 3, 640, 640])
+            out_imgs = imgs.permute(0, 2, 3, 1).numpy()
+            out_segs = seg_labels.numpy()
+            for j, (out_img, out_seg, path) in enumerate(zip(out_imgs, out_segs, paths)):
+                # path_preffix = Path(path).stem
+                path_preffix = f'{epoch}_{i}_{j}_'
+                cv2.imwrite(f'runs/tmp/{path_preffix}.jpg', cv2.cvtColor(out_img, cv2.COLOR_BGR2RGB))
+                file_name = f'runs/tmp/{path_preffix}_label.png'
+                if (out_seg > 0).any() and out_seg.min() >= 0 and out_seg.max() < 255:
+                    lbl_pil = Image.fromarray(out_seg.astype(np.uint8), mode="P")
+                    colormap = imgviz.label_colormap()
+                    lbl_pil.putpalette(colormap.flatten())
+                    lbl_pil.save(file_name)
 
 
 if __name__ == '__main__':
