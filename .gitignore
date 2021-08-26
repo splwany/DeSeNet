@@ -29,6 +29,8 @@ weights/
 # Datasets
 datasets/
 
+runs/
+
 .idea/
 
 ### Python template
