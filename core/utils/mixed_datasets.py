@@ -80,7 +80,7 @@ def correct_rotation(img):
     return img
 
 
-def create_mixed_dataloader(path, imgsz, batch_size, stride, opt, hyp=None, augment=False, cache=False, pad=0.0, rect=False,
+def create_mixed_dataloader(path, imgsz, batch_size, stride, opt, hyp=None, augment=False, pad=0.0, rect=False,
                             rank=-1, world_size=1, workers=8, image_weights=False, quad=False, prefix='', seed=0):
     # 确保 DDP 中的主进程先加载 dataset，这样其他进程可以使用其缓存
     with torch_distributed_zero_first(rank):
@@ -88,7 +88,6 @@ def create_mixed_dataloader(path, imgsz, batch_size, stride, opt, hyp=None, augm
                                       augment=augment,  # augment images
                                       hyp=hyp,  # augmentation hyperparameters
                                       rect=rect,  # rectangular training
-                                      cache_images=cache,
                                       single_cls=opt.single_cls,
                                       stride=int(stride),
                                       pad=pad,
@@ -163,7 +162,7 @@ def img2label_paths(img_paths):
 
 class LoadImagesAndLabels(Dataset):  # for training/testing
     def __init__(self, path, img_size=640, batch_size=16, augment=False, hyp=None, rect=False, image_weights=False,
-                 cache_images=False, single_cls=False, stride=32, pad=0.0, prefix='', seed=0):
+                 single_cls=False, stride=32, pad=0.0, prefix='', seed=0):
         self.img_size = img_size
         self.augment = augment
         self.hyp = hyp

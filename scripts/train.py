@@ -137,7 +137,7 @@ def train(hyp, opt, device, tb_writer=None):
     for epoch in range(2):
         # Trainloader
         dataloader, dataset = create_mixed_dataloader(test_path, imgsz, batch_size, gs, opt,
-                                                hyp=hyp, augment=True, cache=opt.cache_images, rect=opt.rect, rank=rank,
+                                                hyp=hyp, augment=True, rect=opt.rect, rank=rank,
                                                 world_size=opt.world_size, workers=opt.workers,
                                                 image_weights=opt.image_weights, quad=opt.quad, prefix=colorstr('train: '), seed=epoch)
         mlc = np.concatenate(dataset.det_labels, 0)[:, 0].max()  # max label class 标签中共有多少类
@@ -172,7 +172,6 @@ if __name__ == '__main__':
     parser.add_argument('--rect', action='store_true', help='矩形训练')
     parser.add_argument('--sync-bn', action='store_true', help='使用 SyncBatchNorm, 仅 DDP 模式可用')
     parser.add_argument('--local_rank', type=int, default=-1, help='DDP 参数, 不要改')
-    parser.add_argument('--cache-images', action='store_true', help='缓存图片以加速训练')
     parser.add_argument('--image-weights', action='store_true', help='use weighted image selection for training')
     parser.add_argument('--device', default='', help='cuda 设备, 例如 0 或者 0,1,2,3 或者 cpu')
     parser.add_argument('--single-cls', action='store_true', help='将多类当作一类来训练')
