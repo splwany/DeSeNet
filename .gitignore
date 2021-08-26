@@ -26,6 +26,9 @@ weights/
 *.mlmodel
 *.torchscript
 
+# Datasets
+datasets/
+
 .idea/
 
 ### Python template

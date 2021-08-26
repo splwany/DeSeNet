@@ -1,0 +1,29 @@
+# Blind 2021 dataset
+# Train command: python scripts/train.py --data core/data/blind.yaml
+# train and val data as 1) directory: path/images/, 2) file: path/images.txt, or 3) list: [path1/images/, path2/images/]
+# Default dataset location is at:
+#   /parent_folder
+#     /dataset
+#       /blind
+
+
+train: datasets/blind/images/train/
+val: datasets/blind/images/val/
+
+# 目标检测数据集
+de:
+  nc: 6  # 类别数
+  names:  # 类别名
+    - 'obstacle'
+    - 'pole'
+    - 'tree'
+    - 'automobile'
+    - 'motorcycle'
+    - 'bicycle'
+
+# 语义分割数据集
+se:
+  nc: 2  # 类别数
+  names:  # 类别名
+    - 'step'
+    - 'shoulder'
