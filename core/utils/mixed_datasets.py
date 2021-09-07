@@ -22,7 +22,7 @@ from PIL import ExifTags, Image
 from torch.utils.data import Dataset
 from tqdm import tqdm
 
-from .general import (check_requirements, clean_str, resample_segments,
+from .general import (check_requirements, clean_str, init_seeds, resample_segments,
                       segment2box, segments2boxes, xyn2xy, xywh2xyxy,
                       xywhn2xyxy, xyxy2xywh, seg_xyn2xy, generate_seg_labels_img)
 from .torch_utils import torch_distributed_zero_first
@@ -215,7 +215,7 @@ class LoadImagesAndLabels(Dataset):  # for training/testing
         cache.pop('hash')  # 移除 hash
         cache.pop('version')  # 移除 version
         cache_items = list(cache.items())
-        random.seed(seed)
+        init_seeds(seed)
         random.shuffle(cache_items)
         self.img_files = [item[0] for item in cache_items]  # update
         cache_values = [item[1] for item in cache_items]

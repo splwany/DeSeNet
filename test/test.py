@@ -24,7 +24,7 @@ from core.utils.general import generate_seg_labels_img
 from core.utils.mixed_datasets import exif_size, correct_rotation
 
 
-# indices = range(10)
-# print([10] + list(np.random.choice(indices, size=3, replace=False)))
-# print([10] + random.sample(indices, k=3))
-print((1, 2) == tuple(np.array([1, 2])))
+yv, xv = torch.meshgrid([torch.arange(4), torch.arange(4)])
+print(yv)
+print(xv)
+print(torch.stack((xv, yv), 2).view(1, 1, 4, 4, 2))

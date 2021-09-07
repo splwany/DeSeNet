@@ -30,10 +30,10 @@ import sys
 root_path = str(Path(__file__).parent.parent.absolute())
 sys.path.append(root_path)
 
-import scripts.test as test
 from core.utils.mixed_datasets import create_mixed_dataloader
-from core.utils.general import check_file, check_git_status, check_requirements, colorstr, increment_path, init_seeds, set_logging
+from core.utils.general import check_file, check_git_status, check_requirements, colorstr, increment_path, init_seeds, set_logging, xyxy2xywh
 from core.utils.torch_utils import ModelEMA, select_device
+from core.utils.plots import plot_one_box, colors
 # from core.utils.wandb_logging.wandb_utils import check_wandb_resume
 
 logger = logging.getLogger(__name__)
@@ -139,7 +139,7 @@ def train(hyp, opt, device, tb_writer=None):
         dataloader, dataset = create_mixed_dataloader(test_path, imgsz, batch_size, gs, opt,
                                                 hyp=hyp, augment=True, rect=opt.rect, rank=rank,
                                                 world_size=opt.world_size, workers=opt.workers,
-                                                image_weights=opt.image_weights, quad=opt.quad, prefix=colorstr('train: '), seed=epoch)
+                                                image_weights=opt.image_weights, quad=opt.quad, prefix=colorstr('train: '), seed=3+rank+epoch)
         mlc = np.concatenate(dataset.det_labels, 0)[:, 0].max()  # max label class 标签中共有多少类
         nb = len(dataloader)  # batch 总数
         assert mlc < de_nc, f'标签类别数 {mlc} 超过 {opt.data} 中的 nc={de_nc}. nc 值的范围是 0-{de_nc - 1}'
@@ -150,7 +150,11 @@ def train(hyp, opt, device, tb_writer=None):
         for i, (imgs, det_labels, seg_labels, paths, _) in pbar:  # imgs.shape == torch.Size([16, 3, 640, 640])
             out_imgs = imgs.permute(0, 2, 3, 1).numpy()
             out_segs = seg_labels.numpy()
-            for j, (out_img, out_seg, path) in enumerate(zip(out_imgs, out_segs, paths)):
+            for j, (out_img, out_det, out_seg, path) in enumerate(zip(out_imgs, det_labels, out_segs, paths)):
+                for det in out_det:
+                    c = int(det[1])
+                    label = de_names[c]
+                    plot_one_box(det[2:], out_img, label=label, color=colors(c, True), line_thickness=3)
                 # path_preffix = Path(path).stem
                 path_preffix = f'{epoch}_{i}_{j}_'
                 cv2.imwrite(f'runs/tmp/{path_preffix}.jpg', cv2.cvtColor(out_img, cv2.COLOR_BGR2RGB))
