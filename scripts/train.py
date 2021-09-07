@@ -31,7 +31,7 @@ root_path = str(Path(__file__).parent.parent.absolute())
 sys.path.append(root_path)
 
 from core.utils.mixed_datasets import create_mixed_dataloader
-from core.utils.general import check_file, check_git_status, check_requirements, colorstr, increment_path, init_seeds, set_logging, xyxy2xywh
+from core.utils.general import check_file, xywhn2xyxy, check_git_status, check_requirements, colorstr, increment_path, init_seeds, set_logging, xyxy2xywh
 from core.utils.torch_utils import ModelEMA, select_device
 from core.utils.plots import plot_one_box, colors
 # from core.utils.wandb_logging.wandb_utils import check_wandb_resume
@@ -149,16 +149,28 @@ def train(hyp, opt, device, tb_writer=None):
             pbar = tqdm(pbar, total=nb)
         for i, (imgs, det_labels, seg_labels, paths, _) in pbar:  # imgs.shape == torch.Size([16, 3, 640, 640])
             out_imgs = imgs.permute(0, 2, 3, 1).numpy()
+            det_dict = {}
+            for det in det_labels:
+                key = det[0].item()
+                if key in det_dict:
+                    det_dict[key].append(det.numpy())
+                else:
+                    det_dict[key] = [det.numpy()]
+            out_dets = det_dict.values()
             out_segs = seg_labels.numpy()
-            for j, (out_img, out_det, out_seg, path) in enumerate(zip(out_imgs, det_labels, out_segs, paths)):
+            for j, (out_img, out_det, out_seg, path) in enumerate(zip(out_imgs, out_dets, out_segs, paths)):
+                h, w = out_img.shape[:2]
+                out_img = np.ascontiguousarray(out_img)
+                out_det = np.stack(out_det)
+                out_det[:, 2:] = xywhn2xyxy(out_det[:, 2:], w, h)
                 for det in out_det:
                     c = int(det[1])
                     label = de_names[c]
-                    plot_one_box(det[2:], out_img, label=label, color=colors(c, True), line_thickness=3)
+                    plot_one_box(det[2:], out_img, label=label, color=colors(c, True), line_thickness=1)
                 # path_preffix = Path(path).stem
                 path_preffix = f'{epoch}_{i}_{j}_'
-                cv2.imwrite(f'runs/tmp/{path_preffix}.jpg', cv2.cvtColor(out_img, cv2.COLOR_BGR2RGB))
-                file_name = f'runs/tmp/{path_preffix}_label.png'
+                cv2.imwrite(f'runs/tmp{epoch}/{path_preffix}.jpg', cv2.cvtColor(out_img, cv2.COLOR_BGR2RGB))
+                file_name = f'runs/tmp{epoch}/{path_preffix}_label.png'
                 if (out_seg > 0).any() and out_seg.min() >= 0 and out_seg.max() < 255:
                     lbl_pil = Image.fromarray(out_seg.astype(np.uint8), mode="P")
                     colormap = imgviz.label_colormap()

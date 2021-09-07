@@ -25,7 +25,6 @@ for fp in os.listdir(dirpath):
         sz = root.find('size')
         width = float(sz[0].text)
         height = float(sz[1].text)
-        filename = root.find('filename').text
         out_str = ''
         for child in root.findall('object'):  # 找到图片中的所有框
 
@@ -48,7 +47,7 @@ for fp in os.listdir(dirpath):
                 h = (ymax - ymin) / height
                 h = '%.6f' % h
             except ZeroDivisionError:
-                print(filename, '的 width有问题')
+                print(fp, '的 width有问题')
             out_str += ' '.join([str(label_), str(x_center), str(y_center), str(w), str(h) + '\n'])
         if out_str == '':
             continue
