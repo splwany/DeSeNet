@@ -1,6 +1,7 @@
 """Utilities and tools for tracking runs with Weights & Biases."""
 import json
 from pathlib import Path
+from platform import processor
 
 import yaml
 from tqdm import tqdm
@@ -39,7 +40,8 @@ def get_run_info(run_path):
 
 def check_wandb_resume(opt):
     assert wandb is not None, 'Please pip install wandb'
-    process_wandb_config_ddp_mode(opt) if opt.global_rank not in [-1, 0] else None
+    if opt.global_rank not in [-1, 0]:
+        process_wandb_config_ddp_mode(opt)
     if isinstance(opt.resume, str):
         if opt.resume.startswith(WANDB_ARTIFACT_PREFIX):
             if opt.global_rank not in [-1, 0]:  # For resuming DDP runs

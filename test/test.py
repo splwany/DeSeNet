@@ -8,6 +8,7 @@ from pathlib import Path
 import os
 
 import torch
+import pandas as pd
 
 import numpy as np
 from PIL import Image
@@ -21,10 +22,8 @@ root_path = str(Path(__file__).parent.parent.absolute())
 sys.path.append(root_path)
 
 from core.utils.general import generate_seg_labels_img
-from core.utils.mixed_datasets import exif_size, correct_rotation
+from core.utils.mixed_datasets import exif_size, exif_transpose
 
 
-yv, xv = torch.meshgrid([torch.arange(4), torch.arange(4)])
-print(yv)
-print(xv)
-print(torch.stack((xv, yv), 2).view(1, 1, 4, 4, 2))
+m = torch.nn.Sequential()
+print(m.type(torch.float32))

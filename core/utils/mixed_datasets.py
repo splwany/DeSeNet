@@ -1,11 +1,12 @@
-import enum
 import glob
 import hashlib
+import json
 import logging
 import math
 import os
 import random
 import shutil
+import time
 from itertools import repeat
 from multiprocessing.pool import ThreadPool
 from pathlib import Path
@@ -22,9 +23,9 @@ from PIL import ExifTags, Image
 from torch.utils.data import Dataset
 from tqdm import tqdm
 
-from .general import (check_requirements, clean_str, init_seeds, resample_segments,
-                      segment2box, segments2boxes, xyn2xy, xywh2xyxy,
-                      xywhn2xyxy, xyxy2xywh, seg_xyn2xy, generate_seg_labels_img)
+from .general import check_requirements, clean_str, init_seeds, resample_segments,\
+    segment2box, segments2boxes, xyn2xy, xywh2xyxy,\
+    xywhn2xyxy, xyxy2xywh, seg_xyn2xy, generate_seg_labels_img
 from .torch_utils import torch_distributed_zero_first
 
 
@@ -65,30 +66,41 @@ def exif_size(img):
     return s
 
 
-def correct_rotation(img):
-    rotation_dict = {
-        8: Image.ROTATE_90,
-        3: Image.ROTATE_180,
-        6: Image.ROTATE_270
-    }
-    try:
-        rotation = img.getexif()[orientation]
-        if rotation in rotation_dict:
-            return img.transpose(rotation_dict[rotation])
-    except:
-        pass
-    return img
+def exif_transpose(image):
+    """
+    Transpose a PIL image accordingly if it has an EXIF Orientation tag.
+    From https://github.com/python-pillow/Pillow/blob/master/src/PIL/ImageOps.py
+    :param image: The image to transpose.
+    :return: An image.
+    """
+    exif = image.getexif()
+    rotation = exif.get(orientation, 1)  # default 1
+    if rotation > 1:
+        method = {
+            2: Image.FLIP_LEFT_RIGHT,
+            3: Image.ROTATE_180,
+            4: Image.FLIP_TOP_BOTTOM,
+            5: Image.TRANSPOSE,
+            6: Image.ROTATE_270,
+            7: Image.TRANSVERSE,
+            8: Image.ROTATE_90
+        }.get(rotation)
+        if method is not None:
+            image = image.transpose(method)
+            del exif[orientation]
+            image.info["exif"] = exif.tobytes()
+    return image
 
 
-def create_mixed_dataloader(path, imgsz, batch_size, stride, opt, hyp=None, augment=False, pad=0.0, rect=False,
-                            rank=-1, world_size=1, workers=8, image_weights=False, quad=False, prefix='', seed=0):
+def create_mixed_dataloader(path, imgsz, batch_size, stride, single_cls, hyp=None, augment=False, pad=0.0, rect=False,
+                            rank=-1, workers=8, image_weights=False, quad=False, prefix='', seed=0):
     # 确保 DDP 中的主进程先加载 dataset，这样其他进程可以使用其缓存
     with torch_distributed_zero_first(rank):
         dataset = LoadImagesAndLabels(path, imgsz, batch_size,
                                       augment=augment,  # augment images
                                       hyp=hyp,  # augmentation hyperparameters
                                       rect=rect,  # rectangular training
-                                      single_cls=opt.single_cls,
+                                      single_cls=single_cls,
                                       stride=int(stride),
                                       pad=pad,
                                       image_weights=image_weights,
@@ -99,7 +111,7 @@ def create_mixed_dataloader(path, imgsz, batch_size, stride, opt, hyp=None, augm
     cpu_count = os.cpu_count()
     if cpu_count is None:
         cpu_count = 1
-    nw = min([cpu_count // world_size, batch_size if batch_size > 1 else 0, workers])  # workers 数量
+    nw = min([cpu_count, batch_size if batch_size > 1 else 0, workers])  # workers 数量
     sampler = torch_data.distributed.DistributedSampler(dataset) if rank != -1 else None
     loader = torch_data.DataLoader if image_weights else InfiniteDataLoader
     # Use torch.utils.data.DataLoader() if dataset.properties will update during training else InfiniteDataLoader()
@@ -422,7 +434,7 @@ class LoadImagesAndLabels(Dataset):  # for training/testing
         seg_labels_img = generate_seg_labels_img(seg_labels, img.shape[:2])
 
         # Convert
-        img = img[:, :, ::-1].transpose(2, 0, 1)  # BGR to RGB, to 3x416x416
+        img = img.transpose(2, 0, 1)[::-1]  # BGR to RGB, to 3x416x416
         img = np.ascontiguousarray(img)  # 将内存不连续存储的数组转换为内存连续存储的数组，使得运行速度更快
         img = torch.from_numpy(img)
 
@@ -476,7 +488,7 @@ def load_image(self: LoadImagesAndLabels, index: int) -> Tuple[np.ndarray, Tuple
     
     assert os.path.isfile(img_path), f'图片未找到：{img_path}'
     img = Image.open(img_path)  # RGB
-    img = correct_rotation(img)  # 图片旋转矫正
+    img = exif_transpose(img)  # 图片旋转矫正
     w0, h0 = img.size  # 原始 wh
     assert img.size == tuple(self.shapes[index]), f'图片尺寸与缓存不符：{img_path}'
     r = self.img_size / max(w0, h0)  # 比例
@@ -557,12 +569,12 @@ def load_mosaic(self: LoadImagesAndLabels, index):
     # 数据扩充
     assert self.hyp is not None, '没有定义可用的 hyp'
     img4, det_labels4, seg_labels4 = random_perspective(img4, det_labels4, seg_labels4,
-                                                       degrees=self.hyp['degrees'],
-                                                       translate=self.hyp['translate'],
-                                                       scale=self.hyp['scale'],
-                                                       shear=self.hyp['shear'],
-                                                       perspective=self.hyp['perspective'],
-                                                       border=self.mosaic_border)
+                                                        degrees=self.hyp['degrees'],
+                                                        translate=self.hyp['translate'],
+                                                        scale=self.hyp['scale'],
+                                                        shear=self.hyp['shear'],
+                                                        perspective=self.hyp['perspective'],
+                                                        border=self.mosaic_border)
     return img4, det_labels4, seg_labels4
 
 
