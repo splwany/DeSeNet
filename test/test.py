@@ -24,6 +24,3 @@ sys.path.append(root_path)
 from core.utils.general import generate_seg_labels_img
 from core.utils.mixed_datasets import exif_size, exif_transpose
 
-
-m = torch.nn.Sequential()
-print(m.type(torch.float32))

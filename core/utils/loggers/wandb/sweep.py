@@ -1,21 +1,27 @@
 import sys
 from pathlib import Path
 
+from cv2 import calcBackProject
+from core.utils import callbacks
+
 import wandb
 
 FILE = Path(__file__).resolve()
-if str(FILE.parents[3] not in sys.path):
-    sys.path.append(str(FILE.parents[3]))  # add core/ to path
+ROOT = FILE.parents[4]  # YOLOv5 root directory
+if str(ROOT) not in sys.path:
+    sys.path.append(str(ROOT))  # add ROOT to path
 
 from scripts.train import train, parse_opt
-from utils.general import increment_path
-from utils.torch_utils import select_device
+from core.utils.general import increment_path
+from core.utils.torch_utils import select_device
+from core.utils.callbacks import Callbacks
 
 
 def sweep():
     wandb.init()
     # Get hyp dict from sweep agent
     hyp_dict = vars(wandb.config).get("_items")
+    assert hyp_dict is not None
 
     # Workaround: get necessary opt args
     opt = parse_opt(known=True)
@@ -27,7 +33,7 @@ def sweep():
     device = select_device(opt.device, batch_size=opt.batch_size)
 
     # train
-    train(hyp_dict, opt, device)
+    train(hyp_dict, opt, device, callbacks=Callbacks())
 
 
 if __name__ == "__main__":

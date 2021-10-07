@@ -8,7 +8,6 @@ import time
 from contextlib import contextmanager
 from copy import deepcopy
 from pathlib import Path
-from typing import no_type_check_decorator
 from collections import OrderedDict
 
 import torch
@@ -23,7 +22,7 @@ try:
 except ImportError:
     thop = None
 
-logger = logging.getLogger(__name__)
+LOGGER = logging.getLogger(__name__)
 
 
 @contextmanager
@@ -32,10 +31,10 @@ def torch_distributed_zero_first(local_rank: int):
     在分布式训练时，让其他进程等待主进程执行完一些操作后再一起运行
     """
     if local_rank not in [-1, 0]:
-        distributed.barrier()
+        distributed.barrier(device_ids=[local_rank])
     yield
     if local_rank == 0:
-        distributed.barrier()
+        distributed.barrier(device_ids=[0])
 
 
 def init_torch_seeds(seed=0):
@@ -47,6 +46,12 @@ def init_torch_seeds(seed=0):
         cudnn.benchmark, cudnn.deterministic = True, False
 
 
+def date_modified(path=__file__):
+    # return human-readable file modification date, i.e. '2021-3-26'
+    t = datetime.datetime.fromtimestamp(Path(path).stat().st_mtime)
+    return f'{t.year}-{t.month}-{t.day}'
+
+
 def git_describe(path=Path(__file__).parent):  # path must be a directory
     # return human-readable git description, i.e. v5.0-5-g3e25f1e https://git-scm.com/docs/git-describe
     s = f'git -C {path} describe --tags --long --always'
@@ -56,13 +61,7 @@ def git_describe(path=Path(__file__).parent):  # path must be a directory
         return ''  # not a git repository
 
 
-def date_modified(path=__file__):
-    # return human-readable file modification date, i.e. '2021-3-26'
-    t = datetime.datetime.fromtimestamp(Path(path).stat().st_mtime)
-    return f'{t.year}-{t.month}-{t.day}'
-
-
-def select_device(device='', batch_size=None):
+def select_device(device='', batch_size=None) -> torch.device:
     # device = 'cpu' or '0' or '0,1,2,3'
     s = f'DeSeNet 🚀 {git_describe() or date_modified()} torch {torch.__version__} '  # string
     cpu = device.lower() == 'cpu'
@@ -85,7 +84,7 @@ def select_device(device='', batch_size=None):
     else:
         s += 'CPU\n'
 
-    logger.info(s.encode().decode('ascii', 'ignore') if platform.system() == 'Windows' else s)  # emoji-safe
+    LOGGER.info(s.encode().decode('ascii', 'ignore') if platform.system() == 'Windows' else s)  # emoji-safe
     return torch.device('cuda:0' if cuda else 'cpu')
 
 
@@ -249,7 +248,7 @@ def model_info(model, verbose=False, img_size=640):
     except (ImportError, Exception):
         fs = ''
 
-    logger.info(f"Model Summary: {len(list(model.modules()))} layers, {n_p} parameters, {n_g} gradients{fs}")
+    LOGGER.info(f"Model Summary: {len(list(model.modules()))} layers, {n_p} parameters, {n_g} gradients{fs}")
 
 
 def load_classifier(name='resnet101', n=2):
@@ -291,6 +290,26 @@ def copy_attr(a, b, include=(), exclude=()):
             continue
         else:
             setattr(a, k, v)
+
+
+class EarlyStopping:
+    # YOLOv5 simple early stopper
+    def __init__(self, patience=30):
+        self.best_fitness = 0.0  # i.e. mAP
+        self.best_epoch = 0
+        self.patience = patience or float('inf')  # epochs to wait after fitness stops improving to stop
+        self.possible_stop = False  # possible stop may occur next epoch
+
+    def __call__(self, epoch, fitness):
+        if fitness >= self.best_fitness:  # >= 0 to allow for early zero-fitness stage of training
+            self.best_epoch = epoch
+            self.best_fitness = fitness
+        delta = epoch - self.best_epoch  # epochs without improvement
+        self.possible_stop = delta >= (self.patience - 1)  # possible stop may occur next epoch
+        stop = delta >= self.patience  # stop training if patience exceeded
+        if stop:
+            LOGGER.info(f'EarlyStopping patience {self.patience} exceeded, stopping training.')
+        return stop
 
 
 class ModelEMA:

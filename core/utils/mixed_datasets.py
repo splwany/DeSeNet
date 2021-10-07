@@ -243,7 +243,7 @@ class LoadImagesAndLabels(Dataset):  # for training/testing
         nb = bi[-1] + 1  # number of batches
         self.batch = bi  # batch index of image
         self.n = nu
-        self.indices = range(nu)
+        self.indices = list(range(nu))
 
         # 矩形训练        
         if self.rect:

@@ -14,6 +14,7 @@ FILE = Path(__file__).resolve()
 ROOT = FILE.parents[2]  # YOLOv5 root directory
 if str(ROOT) not in sys.path:
     sys.path.append(str(ROOT))  # to run '$ python *.py' files in subdirectories
+ROOT = ROOT.relative_to(Path.cwd())  # relative
 
 from models.common import *
 from models.experimental import *
@@ -289,7 +290,7 @@ def parse_model(d, ch):  # model_dict, input_channels(3)
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--cfg', type=str, default='yolov5s.yaml', help='model.yaml')
+    parser.add_argument('--cfg', type=str, default=ROOT / 'yolov5s.yaml', help='model.yaml')
     parser.add_argument('--device', default='', help='cuda device, i.e. 0 or 0,1,2,3 or cpu')
     parser.add_argument('--profile', action='store_true', help='profile model speed')
     opt = parser.parse_args()
