@@ -4,3 +4,9 @@
 
 # DeSeNet
 Real-time end-to-end network for Object Detection &amp; Semantic Segmentation
+
+## Dataset
+
+Unzip the ZIP to folder `datasets`
+
+[blind dataset（viside code：bc1d）](https://cloud.189.cn/web/share?code=zi2iAzbUvequ)
