@@ -24,3 +24,10 @@ sys.path.append(root_path)
 from core.utils.general import generate_seg_labels_img
 from core.utils.mixed_datasets import exif_size, exif_transpose
 
+from itertools import repeat
+
+def run():
+    return 1, 2
+
+a, _ = run()
+print(a)

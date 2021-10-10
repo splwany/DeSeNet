@@ -1,18 +1,14 @@
 import glob
 import hashlib
-import json
 import logging
 import math
 import os
 import random
 import shutil
-import time
 from itertools import repeat
-from multiprocessing.pool import ThreadPool
+from multiprocessing.pool import ThreadPool, Pool
 from pathlib import Path
-from sys import is_finalizing
-from tarfile import is_tarfile
-from typing import Tuple, Union
+from typing import List, Tuple
 
 import cv2
 import numpy as np
@@ -30,9 +26,9 @@ from .torch_utils import torch_distributed_zero_first
 
 
 # Parameters
-img_formats = ['bmp', 'jpg', 'jpeg', 'png', 'tif', 'tiff', 'dng', 'webp', 'mpo']  # 可用的图片后缀名
-vid_formats = ['mov', 'avi', 'mp4', 'mpg', 'mpeg', 'm4v', 'wmv', 'mkv']  # 可用的视频后缀名
-logger = logging.getLogger(__name__)
+IMG_FORMATS = ['bmp', 'jpg', 'jpeg', 'png', 'tif', 'tiff', 'dng', 'webp', 'mpo']  # 可用的图片后缀名
+VID_FORMATS = ['mov', 'avi', 'mp4', 'mpg', 'mpeg', 'm4v', 'wmv', 'mkv']  # 可用的视频后缀名
+NUM_THREADS = min(8, os.cpu_count() or 1)  # number of multiprocessing threads
 
 # 获取exif中Orientation标签key值
 orientation = next(filter(lambda item: item[1] == 'Orientation', ExifTags.TAGS.items()))[0]
@@ -93,7 +89,7 @@ def exif_transpose(image):
 
 
 def create_mixed_dataloader(path, imgsz, batch_size, stride, single_cls, hyp=None, augment=False, pad=0.0, rect=False,
-                            rank=-1, workers=8, image_weights=False, quad=False, prefix='', seed=0):
+                            rank=-1, workers=8, image_weights=False, quad=False, prefix=''):
     # 确保 DDP 中的主进程先加载 dataset，这样其他进程可以使用其缓存
     with torch_distributed_zero_first(rank):
         dataset = LoadImagesAndLabels(path, imgsz, batch_size,
@@ -104,14 +100,11 @@ def create_mixed_dataloader(path, imgsz, batch_size, stride, single_cls, hyp=Non
                                       stride=int(stride),
                                       pad=pad,
                                       image_weights=image_weights,
-                                      prefix=prefix,
-                                      seed=seed)
+                                      prefix=prefix)
     
     batch_size = min(batch_size, len(dataset))
     cpu_count = os.cpu_count()
-    if cpu_count is None:
-        cpu_count = 1
-    nw = min([cpu_count, batch_size if batch_size > 1 else 0, workers])  # workers 数量
+    nw = min([NUM_THREADS, batch_size if batch_size > 1 else 0, workers])  # workers 数量
     sampler = torch_data.distributed.DistributedSampler(dataset) if rank != -1 else None
     loader = torch_data.DataLoader if image_weights else InfiniteDataLoader
     # Use torch.utils.data.DataLoader() if dataset.properties will update during training else InfiniteDataLoader()
@@ -159,8 +152,8 @@ class _RepeatSampler:
 
 
 def img2label_paths(img_paths):
-    de_labels = []  # 目标检测的 label_paths
-    se_labels = []  # 语义分割的 label_paths
+    de_labels: List[str] = []  # 目标检测的 label_paths
+    se_labels: List[str] = []  # 语义分割的 label_paths
     for x in img_paths:
         x = Path(x)
         f_name = x.with_suffix('.txt').name
@@ -173,8 +166,10 @@ def img2label_paths(img_paths):
 
 
 class LoadImagesAndLabels(Dataset):  # for training/testing
+    cache_version = 0.5  # dataset labels *.cache version
+
     def __init__(self, path, img_size=640, batch_size=16, augment=False, hyp=None, rect=False, image_weights=False,
-                 single_cls=False, stride=32, pad=0.0, prefix='', seed=0):
+                 single_cls=False, stride=32, pad=0.0, prefix=''):
         self.img_size = img_size
         self.augment = augment
         self.hyp = hyp
@@ -183,10 +178,10 @@ class LoadImagesAndLabels(Dataset):  # for training/testing
         self.mosaic = self.augment and not self.rect  # 同时加载四张图片为一张 mosaic 图（仅在训练期间有效）
         self.mosaic_border = [-img_size // 2, -img_size // 2]
         self.stride = stride
+        self.pad = pad
         self.path = path
 
-        p = Path()
-
+        p = None
         try:
             f = []  # image files
             for p in path if isinstance(path, list) else [path]:
@@ -199,12 +194,13 @@ class LoadImagesAndLabels(Dataset):  # for training/testing
                         f += [p.parent / x.lstrip(os.sep) for x in t]  # lacal to global path
                 else:
                     raise Exception(f'{prefix}{p} 不存在')
-            self.img_files = sorted([str(x) for x in f if x.suffix[1:].lower() in img_formats])
+            self.img_files = sorted([str(x) for x in f if x.suffix[1:].lower() in IMG_FORMATS])
             assert self.img_files, f'{prefix}没找到图片'
         except Exception as e:
             raise Exception(f'{prefix}数据加载错误，{path}: {e}')
         
         # 检查缓存
+        assert isinstance(p, Path)
         self.de_label_files, self.se_label_files = img2label_paths(self.img_files)
         cache_parent = p.parent.parent if p.is_file() else Path(self.de_label_files[0]).parent.parent.parent
         cache_name = (p if p.is_file() else Path(self.de_label_files[0]).parent).with_suffix('.cache').name
@@ -221,29 +217,36 @@ class LoadImagesAndLabels(Dataset):  # for training/testing
         if exists:
             d = f"已扫描 '{cache_path}' 中的图片和标注... 发现{nf}个，丢失{nm}个，空{ne}个，损坏{nc}个，使用{nu}个"
             tqdm(None, desc=prefix + d, total=nu, initial=nu)  # 显示 cache 结果
+            if cache['msgs']:
+                logging.info('\n'.join(cache['msgs']))  # 显示 warnings
         assert nu > 0 or not augment, f'{prefix}{cache_path}中无标注，无法训练'
 
+        bi = np.floor(np.arange(nu) / batch_size).astype(np.int32)  # batch index
+        self.batch = bi  # batch index of image
+        self.n = nu
+        self.indices = list(range(nu))
+
         # 读取缓存文件
-        cache.pop('hash')  # 移除 hash
-        cache.pop('version')  # 移除 version
-        cache_items = list(cache.items())
-        init_seeds(seed)
-        random.shuffle(cache_items)
-        self.img_files = [item[0] for item in cache_items]  # update
-        cache_values = [item[1] for item in cache_items]
-        self.shapes, self.det_labels, self.seg_labels = zip(*cache_values)
-        self.shapes = np.array(self.shapes, dtype=np.float64)
+        [cache.pop(k) for k in ('hash', 'version', 'msgs')]  # 移除元素
+        self._cache_items = list(cache.items())
+        # TODO 下面这行可能不需要在 init 时运行
+        # self.img_files, self.shapes, self.det_labels, self.seg_labels = self.reshuffle()
         self.de_label_files, self.se_label_files = img2label_paths(cache.keys())  # update
         if single_cls:
             for d, s in zip(self.det_labels, self.seg_labels):
                 d[:, 0] = 0
                 s[:, 0] = 0
-        
-        bi = np.floor(np.arange(nu) / batch_size).astype(np.int32)  # batch index
-        nb = bi[-1] + 1  # number of batches
-        self.batch = bi  # batch index of image
-        self.n = nu
-        self.indices = list(range(nu))
+
+        # TODO 将图片缓存到内存以加速训练（注意：大数据集可能超过RAM）
+    
+    def reshuffle(self, seed=None):
+        if seed:
+            init_seeds(seed)
+        random.shuffle(self._cache_items)  # TODO 此处很重要
+        self.img_files = [item[0] for item in self._cache_items]  # update
+        cache_values = [item[1] for item in self._cache_items]
+        self.shapes, self.det_labels, self.seg_labels = zip(*cache_values)  # update
+        self.shapes = np.array(self.shapes, dtype=np.float32)
 
         # 矩形训练        
         if self.rect:
@@ -258,6 +261,8 @@ class LoadImagesAndLabels(Dataset):  # for training/testing
             self.shapes = self.shapes[irect]  # 图片尺寸
 
             # 设置用来训练的图片的尺寸
+            bi = self.batch  # batch index of image
+            nb = self.batch[-1] + 1  # number of batches
             shapes = []
             for i in range(nb):
                 ari = ar[bi == i]
@@ -269,73 +274,38 @@ class LoadImagesAndLabels(Dataset):  # for training/testing
                 else:
                     shapes.append([1, 1])
             
-            self.batch_shapes = np.ceil(np.array(shapes) * img_size / stride + pad).astype(np.int32) * stride
+            self.batch_shapes = np.ceil(np.array(shapes) * self.img_size / self.stride + self.pad).astype(np.int32) * self.stride
+        return self.img_files, self.shapes, self.det_labels, self.seg_labels
     
-        # TODO 将图片缓存到内存以加速训练（注意：大数据集可能超过RAM）
 
     def cache_labels(self, path=Path('./labels.cache'), prefix=''):
         # 缓存数据集标注，检查图片并读取形状
         x = {}  # dict
-        nm, nf, ne, nc = 0, 0, 0, 0  # number missing, found, empty, corrupted
-        pbar = tqdm(zip(self.img_files, self.de_label_files, self.se_label_files), desc='正在扫描图片', total=len(self.img_files))
-        for im_file, dlb_file, slb_file in pbar:
-            try:
-                # 验证图片
-                with Image.open(im_file) as im:
-                    im.verify()  # PIL verify
-                    shape = exif_size(im)  # image size
-                    assert im.format.lower() in img_formats, f'不支持的图片格式：{im.format}'
-                    assert (shape[0] > 9) and (shape[1] > 9), f'图片尺寸不能小于10像素，当前：{shape}'
+        nm, nf, ne, nc, msgs = 0, 0, 0, 0, []  # number missing, found, empty, corrupted, messages
+        desc = f"{prefix}正在扫描 '{path.parent / path.stem}' 中的图片和标注... "
+        with Pool(NUM_THREADS) as pool:
+            pbar = tqdm(pool.imap(verify_image_label, zip(self.img_files, self.de_label_files, self.se_label_files, repeat(prefix))), desc=desc, total=len(self.img_files))
+            for im_file, det_labels_f, seg_labels_f, shape, nm_f, nf_f, ne_f, nc_f, msg in pbar:
+                nm += nm_f
+                nf += nf_f
+                ne += ne_f
+                nc += nc_f
+                if len(det_labels_f) or len(seg_labels_f):
+                    x[im_file] = [shape, det_labels_f, seg_labels_f]
+                if msg:
+                    msgs.append(msg)
+                pbar.desc = f"{desc}发现{nf}个, 丢失{nm}个, 空{ne}个, 损坏{nc}个"
 
-                # 验证目标检测标注
-                det_labels = np.zeros((0, 5), dtype=np.float64)
-                if os.path.isfile(dlb_file):
-                    nf += 1  # 目标检测标签已找到
-                    with open(dlb_file, 'r') as f:
-                        l = [x.split() for x in f.read().strip().splitlines() if len(x)]
-                    if len(l):
-                        det_labels = np.array(l, dtype=np.float64)
-                        assert det_labels.shape[1] == 5, '标注要求每一条有五个值'
-                        assert (det_labels >= 0).all(), '存在类别或坐标为负值的标注'
-                        assert (det_labels[:, 1:] <= 1).all(), '未归一化或超出坐标限制'
-                        assert np.unique(det_labels, axis=0).shape[0] == det_labels.shape[0], '存在重复标注'
-                    else:
-                        ne += 1  # 目标检测标签为空
-                else:
-                    nm += 1
-
-                # 验证语义分割标注
-                seg_labels = np.zeros((0, 2))
-                if os.path.isfile(slb_file):
-                    with open(slb_file, 'r') as f:
-                        l = []
-                        for line in f.read().strip().splitlines():
-                            items = line.split()
-                            l.append(np.array(items, dtype=np.float64))
-                    if len(l):
-                        assert all([(item >= 0).all() for item in l]), '存在类别或坐标为负值的标注'
-                        assert all([(item[1:] <= 1).all() for item in l]), '未归一化或超出坐标限制'
-                        seg_labels = np.array([[int(item[0]), np.array(item[1:], dtype=np.float64)] for item in l], dtype=object)
-                        seg_labels[:, 1] = [item.reshape(-1, 2) for item in seg_labels[:, 1]]
-
-                if len(det_labels) or len(seg_labels):
-                    x[im_file] = [shape, det_labels, seg_labels]
-
-            except Exception as e:
-                nc += 1
-                logging.info(f'{prefix}警告：正在忽略损坏的图片与标注 {im_file}: {e}')
-            
-            pbar.desc = f"{prefix}正在扫描 '{path.parent / path.stem}' 中的图片和标注" \
-                        f"发现{nf}个，丢失{nm}个，空{ne}个，损坏{nc}个"
         pbar.close()
-
+        if msgs:
+            logging.info('\n'.join(msgs))
         if nf == 0:
-            logging.info(f'{prefix}警告：{path}中没找到标注')
-        
+            logging.info(f'{prefix}警告：{path}中没找到标注.')
         nu = len(x)  # number used
         x['hash'] = get_hash(self.de_label_files + self.se_label_files + self.img_files)
         x['results'] = nf, nm, ne, nc, nu
-        x['version'] = 0.2  # cache version
+        x['msgs'] = msgs  # warnings
+        x['version'] = self.cache_version  # cache version
         try:
             torch.save(x, path)  # save cache for next time
             logging.info(f'{prefix}新的cache已创建：{path}')
@@ -702,3 +672,132 @@ def box_candidates(box1, box2, wh_thr=2, ar_thr=20, area_thr=0.1, eps=1e-16, spe
     w2, h2 = box2[2] - box2[0], box2[3] - box2[1]
     ar = np.maximum(w2 / (h2 + eps), h2 / (w2 + eps))  # aspect ratio
     return (w2 > wh_thr) & (h2 > wh_thr) & (w2 * h2 / (w1 * h1 + eps) > area_thr) & ((ar < ar_thr) | ((special_classes == 0) and (ar < 120)))  # candidates
+
+
+def create_folder(path='./new'):
+    # Create folder
+    if os.path.exists(path):
+        shutil.rmtree(path)  # delete output folder
+    os.makedirs(path)  # make new output folder
+
+
+def flatten_recursive(path='../datasets/coco128'):
+    # Flatten a recursive directory by bringing all files to top level
+    new_path = Path(path + '_flat')
+    create_folder(new_path)
+    for file in tqdm(glob.glob(str(Path(path)) + '/**/*.*', recursive=True)):
+        shutil.copyfile(file, new_path / Path(file).name)
+
+
+def extract_boxes(path='../datasets/coco128'):  # from utils.datasets import *; extract_boxes()
+    # Convert detection dataset into classification dataset, with one directory per class
+    path = Path(path)  # images dir
+    shutil.rmtree(path / 'classifier') if (path / 'classifier').is_dir() else None  # remove existing
+    files = list(path.rglob('*.*'))
+    n = len(files)  # number of files
+    for im_file in tqdm(files, total=n):
+        if im_file.suffix[1:] in IMG_FORMATS:
+            # image
+            im = cv2.imread(str(im_file))[..., ::-1]  # BGR to RGB
+            h, w = im.shape[:2]
+
+            # labels
+            lb_file = Path(img2label_paths([str(im_file)])[0][0])
+            if Path(lb_file).exists():
+                with open(lb_file, 'r') as f:
+                    lb = np.array([x.split() for x in f.read().strip().splitlines()], dtype=np.float32)  # labels
+
+                for j, x in enumerate(lb):
+                    c = int(x[0])  # class
+                    f = (path / 'classifier') / f'{c}' / f'{path.stem}_{im_file.stem}_{j}.jpg'  # new filename
+                    if not f.parent.is_dir():
+                        f.parent.mkdir(parents=True)
+
+                    b = x[1:] * [w, h, w, h]  # box
+                    # b[2:] = b[2:].max()  # rectangle to square
+                    b[2:] = b[2:] * 1.2 + 3  # pad
+                    b = xywh2xyxy(b.reshape(-1, 4)).ravel().astype(np.int_)
+
+                    b[[0, 2]] = np.clip(b[[0, 2]], 0, w)  # clip boxes outside of image
+                    b[[1, 3]] = np.clip(b[[1, 3]], 0, h)
+                    assert cv2.imwrite(str(f), im[b[1]:b[3], b[0]:b[2]]), f'box failure in {f}'
+
+
+def autosplit(path='../datasets/coco128/images', weights=(0.9, 0.1, 0.0), annotated_only=False):
+    """ Autosplit a dataset into train/val/test splits and save path/autosplit_*.txt files
+    Usage: from utils.datasets import *; autosplit()
+    Arguments
+        path:            Path to images directory
+        weights:         Train, val, test weights (list, tuple)
+        annotated_only:  Only use images with an annotated txt file
+    """
+    path = Path(path)  # images dir
+    files = sum([list(path.rglob(f"*.{img_ext}")) for img_ext in IMG_FORMATS], [])  # image files only
+    n = len(files)  # number of files
+    random.seed(0)  # for reproducibility
+    indices = random.choices([0, 1, 2], weights=weights, k=n)  # assign each image to a split
+
+    txt = ['autosplit_train.txt', 'autosplit_val.txt', 'autosplit_test.txt']  # 3 txt files
+    [(path.parent / x).unlink() for x in txt]  # remove existing
+
+    print(f'Autosplitting images from {path}' + ', using *.txt labeled images only' * annotated_only)
+    for i, img in tqdm(zip(indices, files), total=n):
+        if not annotated_only or Path(img2label_paths([str(img)])[0][0]).exists():  # check label
+            with open(path.parent / txt[i], 'a') as f:
+                f.write('./' + img.relative_to(path.parent).as_posix() + '\n')  # add image to txt file
+
+
+def verify_image_label(args):
+    # Verify one image-label pair
+    im_file, dlb_file, slb_file, prefix = args
+    nm, nf, ne, nc, msg = 0, 0, 0, 0, ''  # number (missing, found, empty, corrupt), message
+    try:
+        # 验证图片
+        with Image.open(im_file) as im:
+            im.verify()  # PIL verify
+            shape = exif_size(im)  # image size
+            assert im.format.lower() in IMG_FORMATS, f'不支持的图片格式：{im.format}'
+            assert (shape[0] > 9) and (shape[1] > 9), f'图片尺寸不能小于10像素，当前：{shape}'
+        if im.format.lower() in ('jpg', 'jpeg'):
+            with open(im_file, 'rb') as f:
+                f.seek(-2, 2)
+                if f.read() != b'\xff\xd9':  # corrupt JPEG 损坏的 JPEG
+                    Image.open(im_file).save(im_file, format='JPEG', subsampling=0, quality=100)  # re-save image
+                    msg = f'{prefix}警告：损坏的 JPEG 已重新保存 {im_file}'
+
+        # 验证目标检测标注
+        det_labels = np.zeros((0, 5), dtype=np.float32)
+        if os.path.isfile(dlb_file):
+            nf = 1  # 目标检测标签已找到
+            with open(dlb_file, 'r') as f:
+                l = [x.split() for x in f.read().strip().splitlines() if len(x)]
+            if len(l):
+                det_labels = np.array(l, dtype=np.float32)
+                assert det_labels.shape[1] == 5, '标注要求每一条有五个值'
+                assert (det_labels >= 0).all(), '存在类别或坐标为负值的标注'
+                assert (det_labels[:, 1:] <= 1).all(), '未归一化或超出坐标限制'
+                assert np.unique(det_labels, axis=0).shape[0] == det_labels.shape[0], '存在重复标注'
+            else:
+                ne = 1  # 目标检测标签为空
+        else:
+            nm = 1
+
+        # 验证语义分割标注
+        seg_labels = np.zeros((0, 2))
+        if os.path.isfile(slb_file):
+            with open(slb_file, 'r') as f:
+                l = []
+                for line in f.read().strip().splitlines():
+                    items = line.split()
+                    l.append(np.array(items, dtype=np.float32))
+            if len(l):
+                assert all([(item >= 0).all() for item in l]), '存在类别或坐标为负值的标注'
+                assert all([(item[1:] <= 1).all() for item in l]), '未归一化或超出坐标限制'
+                seg_labels = np.array([[int(item[0]), np.array(item[1:], dtype=np.float32)] for item in l], dtype=object)
+                seg_labels[:, 1] = [item.reshape(-1, 2) for item in seg_labels[:, 1]]
+
+        return im_file, det_labels, seg_labels, shape, nm, nf, ne, nc, msg
+    except Exception as e:
+        nc = 1
+        msg = f'{prefix}警告：正在忽略损坏的图片与标注 {im_file}: {e}'
+        return None, None, None, None, nm, nf, ne, nc, msg

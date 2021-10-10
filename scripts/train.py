@@ -1,6 +1,7 @@
 import argparse
 from collections import OrderedDict
-from core.utils.google_utils import attempt_download
+from core.utils.datasets import InfiniteDataLoader
+
 import logging
 import math
 import os
@@ -17,6 +18,7 @@ import torch
 import torch.distributed as dist
 import torch.utils.data as torch_data
 import torch.nn as nn
+import torch.nn.functional as F
 import yaml
 from PIL import Image
 from torch.cuda import amp
@@ -30,14 +32,17 @@ if str(ROOT) not in sys.path:
     sys.path.append(str(ROOT))  # add ROOT to path
 ROOT = ROOT.relative_to(Path.cwd())  # relative
 
+import scripts.val as val  # for end-of-epoch mAP
+from core.models.experimental import attempt_load
 from core.models.yolo import Model
 from core.utils.autoanchor import check_anchors
+from core.utils.google_utils import attempt_download
 from core.utils.mixed_datasets import create_mixed_dataloader
-from core.utils.general import (check_dataset, check_file, check_git_status, check_img_size, check_suffix,
+from core.utils.general import (check_dataset, check_file, check_yaml, check_git_status, check_img_size, check_suffix,
                                 check_requirements, colorstr, get_latest_run, labels_to_class_weights, labels_to_image_weights, one_cycle,
-                                increment_path, init_seeds, set_logging,
+                                increment_path, init_seeds, print_args, set_logging, strip_optimizer,
                                 xywhn2xyxy, xyxy2xywh, methods)
-from core.utils.loss import ComputeLoss
+from core.utils.loss import ComputeLoss, SegmentationLosses
 from core.utils.plots import colors, plot_labels, plot_one_box
 from core.utils.torch_utils import ModelEMA, select_device, de_parallel, intersect_dicts, torch_distributed_zero_first, EarlyStopping
 from core.utils.wandb_logging.wandb_utils import check_wandb_resume
@@ -54,7 +59,7 @@ WORLD_SIZE = int(os.getenv('WORLD_SIZE', 1))
 def train(hyp, opt, device: torch.device, callbacks):
     # 从 opt 中获取相关参数
     save_dir, epochs, batch_size, weights, single_cls = Path(opt.save_dir), opt.epochs, opt.batch_size, opt.weights, opt.single_cls
-    data, cfg, resume, workers, freeze = opt.data, opt.cfg, opt.resume, opt.workers, opt.freeze
+    data, cfg, resume, noval, nosave, workers, freeze = opt.data, opt.cfg, opt.resume, opt.noval, opt.nosave, opt.workers, opt.freeze
 
     # 目录
     w = save_dir / 'weights'  # weights dir
@@ -211,14 +216,15 @@ def train(hyp, opt, device: torch.device, callbacks):
     train_loader, dataset = create_mixed_dataloader(train_path, imgsz, batch_size // WORLD_SIZE, gs, single_cls,
                                                     hyp=hyp, augment=True, rect=opt.rect, rank=RANK,
                                                     workers=workers, image_weights=opt.image_weights, quad=opt.quad,
-                                                    prefix=colorstr('train: '), seed=2 + RANK + epoch * WORLD_SIZE)
+                                                    prefix=colorstr('train: '))
+    assert isinstance(train_loader, InfiniteDataLoader)
     mlc = int(np.concatenate(dataset.det_labels, 0)[:, 0].max())  # max label class 标签中共有多少类
     nb = len(train_loader)  # batch 总数
     assert mlc < de_nc, f'目标检测标签类别数 {mlc} 超过 {opt.data} 中的 nc={de_nc}. nc 值的范围是 0{"-" + str(de_nc - 1) if de_nc > 1 else ""}'
 
     # Process 0
     if RANK in [-1, 0]:
-        val_loader = create_mixed_dataloader(val_path, imgsz, batch_size // WORLD_SIZE, gs, single_cls,
+        val_loader, _ = create_mixed_dataloader(val_path, imgsz, batch_size // WORLD_SIZE, gs, single_cls,
                                                 hyp=hyp, rect=True, rank=-1,
                                                 workers=workers, pad=0.5,
                                                 prefix=colorstr('val: '))[0]
@@ -263,12 +269,21 @@ def train(hyp, opt, device: torch.device, callbacks):
     scaler = amp.GradScaler(enabled=cuda)
     stopper = EarlyStopping(patience=opt.patience)
     compute_loss = ComputeLoss(model)  # init loss class
+
+    # Base, PSP 和 Lab 用这个，无 aux
+    compute_seg_loss = SegmentationLosses()
+
+    detgain, seggain = 0.6, 0.35  # 目标检测、语义分隔 比例
+    # CE、1/8单输入、batchsize13用0.65,0.35左右,注意64向下取整的梯度积累，比13*4=52大(12*5=64)通常应该降低分割损失比例或调小学习率
+
     LOGGER.info(f'Image sizes {imgsz} train, {imgsz} val\n'
                 f'Using {train_loader.num_workers} dataloader workers\n'
                 f'Logging results to {colorstr("bold", save_dir)}\n'
                 f'Starting training for {epochs} epochs...')
+
     for epoch in range(start_epoch, epochs):  # epoch -----------------------------------------------------------
         model.train()
+        dataset.reshuffle(1 + RANK + epoch * WORLD_SIZE)  # 重新打乱以确保每轮的随机情况不同
         
         # Update image weights (optional, single-GPU only)
         if opt.image_weights:
@@ -276,10 +291,11 @@ def train(hyp, opt, device: torch.device, callbacks):
             iw = labels_to_image_weights(dataset.det_labels, nc=de_nc, class_weights=cw)  # image weights
             dataset.indices = random.choices(range(dataset.n), weights=iw, k=dataset.n)  # rand weighted idx
 
-        mloss = torch.zeros(3, device=device)  # mean losses
+        mloss = torch.zeros(3, device=device)  # 目标检测 mean losses
+        msegloss = torch.zeros(1, device=device)  # 混合的 mean losses, 两者计算也可知分割 loss
         if RANK != -1:
             assert isinstance(train_loader.sampler, torch_data.distributed.DistributedSampler)
-            train_loader.sampler.set_epoch(epoch)
+            train_loader.sampler.set_epoch(epoch)  # shuffle时，保证每个epoch顺序不同
         pbar = enumerate(train_loader)
         LOGGER.info(('\n' + '%10s' * 7) % ('Epoch', 'gpu_men', 'box', 'obj', 'cls', 'labels', 'img_size'))
         if RANK in [-1, 0]:
@@ -337,42 +353,52 @@ def train(hyp, opt, device: torch.device, callbacks):
                 sf = sz / max(imgs.shape[2:])  # scale factor
                 if sf != 1:
                     ns = [math.ceil(x * sf / gs) * gs for x in imgs.shape[2:]]  # new shape (stretched to gs-multiple)
-                    imgs = nn.functional.interpolate(imgs, size=ns, mode='bilinear', align_corners=False)
+                    imgs = F.interpolate(imgs, size=ns, mode='bilinear', align_corners=False)
 
-            # Forward
-            with amp.autocast(enabled=cuda):
-                pred = model(imgs)  # forward
-                loss, loss_items = compute_loss(pred, targets.to(device))  # loss scaled by batch_size
+            # Forward 此处有修改，否则batchsize只能取单检测时候的一半，这种写法可以更大一点
+            with amp.autocast(enabled=cuda):  # 混合精度训练中用来代替autograd
+                det_pred, seg_pred = model(imgs)  # forward
+                # TODO 更改 loss 中的参数
+                det_loss, det_loss_items = compute_loss(det_pred, det_labels.to(device))  # loss scaled by batch_size
+                seg_loss = compute_seg_loss(seg_pred, seg_labels.to(device))
                 if RANK != -1:
-                    loss *= WORLD_SIZE  # gradient averaged between devices in DDP mode
+                    det_loss *= WORLD_SIZE  # gradient averaged between devices in DDP mode
+                    seg_loss *= batch_size
                 if opt.quad:
-                    loss *= 4.
+                    det_loss *= 4.
+                    seg_loss *= 4.
+                det_loss *= detgain  # 目标检测的比例
+                seg_loss *= seggain  # 语义分割的比例
 
             # Backward
-            scaler.scale(loss).backward()
+            scaler.scale(det_loss).backward()
+            scaler.scale(seg_loss).backward()
 
             # Optimize
-            if ni - last_opt_step >= accumulate:
-                scaler.step(optimizer)  # optimizer.step
+            if ni - last_opt_step >= accumulate:  # 梯度积累accumulate次后才优化
+                scaler.step(optimizer)  # optimizer.step 混合精度训练优化时用scaler
                 scaler.update()
-                optimizer.zero_grad()
+                optimizer.zero_grad()  # 每次更新完参数才清空梯度，不更新时累计
                 if ema:
                     ema.update(model)
                 last_opt_step = ni
 
             # Log
+            # TODO 缺少语义分割部分
             if RANK in [-1, 0]:
-                mloss = (mloss * i + loss_items) / (i + 1)  # update mean losses
+                mloss = (mloss * i + det_loss_items) / (i + 1)  # update mean losses
+                msegloss = (msegloss * i + seg_loss.detach() / batch_size) / (i + 1)
                 mem = f'{torch.cuda.memory_reserved() / 1E9 if torch.cuda.is_available() else 0:.3g}G'  # (GB)
-                pbar.set_description(('%10s' * 2 + '%10.4g' * 5) % (
-                    f'{epoch}/{epochs - 1}', mem, *mloss, targets.shape[0], imgs.shape[-1]))
-                callbacks.run('on_train_batch_end', ni, model, imgs, targets, paths, plots, opt.sync_bn)
+                pbar.set_description(('%10s' * 2 + '%10.4g' * 7) % (
+                    f'{epoch}/{epochs - 1}', mem, *mloss, msegloss, det_labels.shape[0], imgs.shape[-1]))
+                callbacks.run('on_train_batch_end', ni, model, imgs, det_labels, paths, plots, opt.sync_bn)
             # end batch ------------------------------------------------------------------------------------------------
 
         # Scheduler
         lr = [x['lr'] for x in optimizer.param_groups]  # for loggers
-        scheduler.step()
+        scheduler.step()  # 更新Scheduler
 
+        # DDP process 0 or single-GPU
         if RANK in [-1, 0]:
             # mAP
             callbacks.run('on_train_epoch_end', epoch=epoch)
@@ -398,14 +424,16 @@ def train(hyp, opt, device: torch.device, callbacks):
             callbacks.run('on_fit_epoch_end', log_vals, epoch, best_fitness, fi)
 
             # Save model
-            if (not nosave) or (final_epoch and not evolve):  # if save
-                ckpt = {'epoch': epoch,
-                        'best_fitness': best_fitness,
-                        'model': deepcopy(de_parallel(model)).half(),
-                        'ema': deepcopy(ema.ema).half(),
-                        'updates': ema.updates,
-                        'optimizer': optimizer.state_dict(),
-                        'wandb_id': loggers.wandb.wandb_run.id if loggers.wandb else None}
+            if (not nosave) or (final_epoch):  # if save
+                ckpt = {
+                    'epoch': epoch,
+                    'best_fitness': best_fitness,
+                    'model': deepcopy(de_parallel(model)).half(),
+                    'ema': deepcopy(ema.ema).half(),
+                    'updates': ema.updates,
+                    'optimizer': optimizer.state_dict(),
+                    'wandb_id': loggers.wandb.wandb_run.id if loggers.wandb else None
+                }
 
                 # Save last, best and delete
                 torch.save(ckpt, last)
@@ -443,11 +471,11 @@ def train(hyp, opt, device: torch.device, callbacks):
                                             batch_size=batch_size // WORLD_SIZE * 2,
                                             imgsz=imgsz,
                                             model=attempt_load(f, device).half(),
-                                            iou_thres=0.65 if is_coco else 0.60,  # best pycocotools results at 0.65
+                                            iou_thres=0.60,  # best pycocotools results at 0.65
                                             single_cls=single_cls,
                                             dataloader=val_loader,
                                             save_dir=save_dir,
-                                            save_json=is_coco,
+                                            save_json=False,
                                             verbose=True,
                                             plots=True,
                                             callbacks=callbacks,
@@ -462,10 +490,10 @@ def train(hyp, opt, device: torch.device, callbacks):
 
 def parse_opt(known=False):
     parser = argparse.ArgumentParser()
-    parser.add_argument('--weights', type=str, default='yolov5s.pt', help='初始化网络权重文件的路径')
+    parser.add_argument('--weights', type=str, default=ROOT / 'yolov5s.pt', help='初始化网络权重文件的路径')
     parser.add_argument('--cfg', type=str, default='', help='网络模型配置文件 model.yaml 的位置')
-    parser.add_argument('--data', type=str, default='core/data/blind.yaml', help='data.yaml 路径')
-    parser.add_argument('--hyp', type=str, default='core/hyp/scratch.yaml', help='超参数路径')
+    parser.add_argument('--data', type=str, default=ROOT / 'core/data/blind.yaml', help='data.yaml 路径')
+    parser.add_argument('--hyp', type=str, default=ROOT / 'core/hyp/scratch.yaml', help='超参数路径')
     parser.add_argument('--epochs', type=int, default=300)
     parser.add_argument('--batch-size', type=int, default=16, help='所有GPU的总batch size')
     parser.add_argument('--imgsz', '--img', '--img-size', type=int, default=640, help='train, val image size (pixels)')
@@ -481,19 +509,22 @@ def parse_opt(known=False):
     parser.add_argument('--adam', action='store_true', help='使用 torch.optim.Adam() 优化器')
     parser.add_argument('--sync-bn', action='store_true', help='使用 SyncBatchNorm, 仅 DDP 模式可用')
     parser.add_argument('--workers', type=int, default=8, help='dataloader workers 的最大值')
-    parser.add_argument('--project', default='runs/train', help='保存到 project/name')
-    parser.add_argument('--entity', default=None, help='W&B entity')
+    parser.add_argument('--project', default=ROOT / 'runs/train', help='保存到 project/name')
     parser.add_argument('--name', default='exp', help='保存到 project/name')
     parser.add_argument('--exist-ok', action='store_true', help='project/name 可以存在, 不会新建')
     parser.add_argument('--quad', action='store_true', help='四分之一 dataloader')
     parser.add_argument('--linear-lr', action='store_true', help='linear LR')
     parser.add_argument('--label-smoothing', type=float, default=0.0, help='标签平滑的 epsilon 值')
+    parser.add_argument('--patience', type=int, default=100, help='EarlyStopping patience (epochs without improvement)')
+    parser.add_argument('--freeze', type=int, default=0, help='要冻结的 layers 数. backbone=10, all=24')
+    parser.add_argument('--save_period', type=int, default=-1, help='每 "save_period" 个 epoch 之后保存一次 model')
+
+    # Weights & Biases arguments
+    parser.add_argument('--entity', default=None, help='W&B entity')
     parser.add_argument('--upload_dataset', action='store_true', help='数据集上传到 W&B 工件表')
     parser.add_argument('--bbox_interval', type=int, default=-1, help='为 W&B 设置 bounding-box 图片打印间隔')
-    parser.add_argument('--save_period', type=int, default=-1, help='每 "save_period" 个 epoch 之后保存一次 model')
     parser.add_argument('--artifact_alias', type=str, default='latest', help='要使用的数据集工件的版本')
-    parser.add_argument('--freeze', type=int, default=0, help='要冻结的 layers 数. backbone=10, all=24')
-    parser.add_argument('--patience', type=int, default=100, help='EarlyStopping patience (epochs without improvement)')
+    
     opt = parser.parse_known_args()[0] if known else parser.parse_args()
     return opt
 
@@ -502,20 +533,21 @@ def main(opt, callbacks=Callbacks()):
     # 检查
     set_logging(RANK)
     if RANK in [-1, 0]:
-        print(colorstr('train: ' + ', '.join(f'{k}={v}' for k, v in vars(opt).items())))
+        print_args(FILE.stem, opt)
         check_git_status()
-        check_requirements(requirements=FILE.parent / 'requirements.txt', exclude=['thop'])
+        check_requirements(exclude=['thop'])
     
     # 恢复，回到之前位置
     if opt.resume and not check_wandb_resume(opt):  # resume an interrupted run
         ckpt = opt.resume if isinstance(opt.resume, str) else get_latest_run()  # specified or most recent path
         assert os.path.isfile(ckpt), 'ERROR: --resume checkpoint does not exist'
-        with open(Path(ckpt).parent.parent / 'opt.yaml') as f:
+        with open(Path(ckpt).parent.parent / 'opt.yaml', errors='ignore') as f:
             opt = argparse.Namespace(**yaml.safe_load(f))  # replace
         opt.cfg, opt.weights, opt.resume = '', ckpt, True  # reinstate
         LOGGER.info(f'正在从 {ckpt} 恢复训练...')
     else:
-        opt.data, opt.cfg, opt.hyp = check_file(opt.data), check_file(opt.cfg), check_file(opt.hyp)  # 检查文件
+        opt.data, opt.cfg, opt.hyp, opt.weights, opt.project = \
+            check_file(opt.data), check_yaml(opt.cfg), check_yaml(opt.hyp), str(opt.weights), str(opt.project)  # 检查文件
         assert len(opt.cfg) or len(opt.weights), '--cfg 和 --weights 必须指定'
         opt.save_dir = str(increment_path(Path(opt.project) / opt.name, exist_ok=opt.exist_ok))
 
@@ -532,7 +564,8 @@ def main(opt, callbacks=Callbacks()):
     # 训练
     train(opt.hyp, opt, device, callbacks)
     if WORLD_SIZE > 1 and RANK == 0:
-        _ = [print('Destroying process group... ', end=''), dist.destroy_process_group(), print('Done.')]
+        LOGGER.info('Destroying process group... ')
+        dist.destroy_process_group()
 
 
 def run(**kwargs):

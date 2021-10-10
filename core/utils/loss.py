@@ -220,3 +220,62 @@ class ComputeLoss:
             tcls.append(c)  # class
 
         return tcls, tbox, indices, anch
+
+
+# 语义分割损失函数  带不带aux，带几个aux内外部接口本应该保持一致，还需更改
+class SegmentationLosses(nn.CrossEntropyLoss):
+    """2D Cross Entropy Loss with Auxilary Loss"""
+    def __init__(self, se_loss=False, se_weight=0.2, nclass=-1, aux_num=2,
+                 aux=False, aux_weight=0.1, weight=None,
+                 ignore_index=-1):
+        super(SegmentationLosses, self).__init__(weight, None, ignore_index)
+        self.se_loss = se_loss
+        self.aux = aux
+        self.nclass = nclass
+        self.se_weight = se_weight
+        self.aux_weight = aux_weight
+        self.bceloss = nn.BCELoss(weight)
+        self.aux_num = aux_num
+
+    def forward(self, *inputs):  # 这里接口写的很丑,没时间重构了,直接点就是无aux不用[],有aux几个结果输出用[]包装
+        if not self.se_loss and not self.aux:  # 无aux, Base,PSP和Lab用这个
+            return super().forward(*inputs)
+        elif not self.se_loss:      
+            if self.aux_num == 2:  # 两个aux，BiSe用这个
+                pred1, pred2, pred3, target = tuple(inputs)
+                loss1 = super().forward(pred1, target)
+                loss2 = super().forward(pred2, target)
+                loss3 = super().forward(pred3, target)
+                return loss1 + self.aux_weight*1.5 * loss2 + self.aux_weight/2.0 * loss3
+            else:  # 一个aux, 目前没有用这个
+                assert self.aux_num == 1
+                pred1, pred2, target = tuple(inputs)
+                loss1 = super().forward(pred1, target)
+                loss2 = super().forward(pred2, target)
+                return loss1 + self.aux_weight * loss2
+        elif not self.aux:   # 目前仅支持以上三种配置(无aux，一个，两个)，以下两种情况目前未使用，所以bug未修改
+            pred, se_pred, target = tuple(inputs)
+            se_target = self._get_batch_label_vector(target, nclass=self.nclass).type_as(pred)
+            loss1 = super(SegmentationLosses, self).forward(pred, target)
+            loss2 = self.bceloss(torch.sigmoid(se_pred), se_target)
+            return loss1 + self.se_weight * loss2
+        else:
+            pred1, se_pred, pred2, target = tuple(inputs)
+            se_target = self._get_batch_label_vector(target, nclass=self.nclass).type_as(pred1)
+            loss1 = super(SegmentationLosses, self).forward(pred1, target)
+            loss2 = super(SegmentationLosses, self).forward(pred2, target)
+            loss3 = self.bceloss(torch.sigmoid(se_pred), se_target)
+            return loss1 + self.aux_weight * loss2 + self.se_weight * loss3
+
+    # @staticmethod
+    # def _get_batch_label_vector(target, nclass):
+    #     # target is a 3D Variable BxHxW, output is 2D BxnClass
+    #     batch = target.size(0)
+    #     tvect = Variable(torch.zeros(batch, nclass))
+    #     for i in range(batch):
+    #         hist = torch.histc(target[i].cpu().data.float(),
+    #                            bins=nclass, min=0,
+    #                            max=nclass-1)
+    #         vect = hist>0
+    #         tvect[i] = vect
+    #     return tvect
