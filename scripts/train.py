@@ -1,13 +1,11 @@
 import argparse
-from collections import OrderedDict
-from core.utils.datasets import InfiniteDataLoader
-
 import logging
 import math
 import os
 import random
 import sys
 import time
+from collections import OrderedDict
 from copy import deepcopy
 from pathlib import Path
 
@@ -16,9 +14,9 @@ import imgviz
 import numpy as np
 import torch
 import torch.distributed as dist
-import torch.utils.data as torch_data
 import torch.nn as nn
 import torch.nn.functional as F
+import torch.utils.data as torch_data
 import yaml
 from PIL import Image
 from torch.cuda import amp
@@ -28,27 +26,38 @@ from tqdm import tqdm
 
 FILE = Path(__file__).resolve()
 ROOT = FILE.parents[1]  # YOLOv5 root directory
+CORE = ROOT / 'core'
 if str(ROOT) not in sys.path:
     sys.path.append(str(ROOT))  # add ROOT to path
+if str(CORE) not in sys.path:
+    sys.path.append(str(CORE))  # add CORE to path
 ROOT = ROOT.relative_to(Path.cwd())  # relative
 
-import scripts.val as val  # for end-of-epoch mAP
 from core.models.experimental import attempt_load
 from core.models.yolo import Model
+from core.utils.datasets import InfiniteDataLoader
 from core.utils.autoanchor import check_anchors
-from core.utils.google_utils import attempt_download
-from core.utils.mixed_datasets import create_mixed_dataloader
-from core.utils.general import (check_dataset, check_file, check_yaml, check_git_status, check_img_size, check_suffix,
-                                check_requirements, colorstr, get_latest_run, labels_to_class_weights, labels_to_image_weights, one_cycle,
-                                increment_path, init_seeds, print_args, set_logging, strip_optimizer,
-                                xywhn2xyxy, xyxy2xywh, methods)
-from core.utils.loss import ComputeLoss, SegmentationLosses
-from core.utils.plots import colors, plot_labels, plot_one_box
-from core.utils.torch_utils import ModelEMA, select_device, de_parallel, intersect_dicts, torch_distributed_zero_first, EarlyStopping
-from core.utils.wandb_logging.wandb_utils import check_wandb_resume
-from core.utils.metrics import fitness
-from core.utils.loggers import Loggers
 from core.utils.callbacks import Callbacks
+from core.utils.general import (check_dataset, check_file, check_git_status,
+                                check_img_size, check_requirements,
+                                check_suffix, check_yaml, colorstr,
+                                get_latest_run, increment_path, init_seeds,
+                                labels_to_class_weights,
+                                labels_to_image_weights, methods, one_cycle,
+                                print_args, set_logging, strip_optimizer,
+                                xywhn2xyxy, xyxy2xywh)
+from core.utils.google_utils import attempt_download
+from core.utils.loggers import Loggers
+from core.utils.loss import ComputeLoss, SegmentationLosses
+from core.utils.metrics import fitness
+from core.utils.mixed_datasets import create_mixed_dataloader
+from core.utils.plots import colors, plot_labels, plot_one_box
+from core.utils.torch_utils import (EarlyStopping, ModelEMA, de_parallel,
+                                    intersect_dicts, select_device,
+                                    torch_distributed_zero_first)
+from core.utils.wandb_logging.wandb_utils import check_wandb_resume
+
+import scripts.val as val  # for end-of-epoch mAP
 
 LOGGER = logging.getLogger(__name__)
 LOCAL_RANK = int(os.getenv('LOCAL_RANK', -1))  # # https://pytorch.org/docs/stable/elastic/run.html
@@ -490,8 +499,8 @@ def train(hyp, opt, device: torch.device, callbacks):
 
 def parse_opt(known=False):
     parser = argparse.ArgumentParser()
-    parser.add_argument('--weights', type=str, default=ROOT / 'yolov5s.pt', help='初始化网络权重文件的路径')
-    parser.add_argument('--cfg', type=str, default='', help='网络模型配置文件 model.yaml 的位置')
+    parser.add_argument('--weights', type=str, default=ROOT / 'weights/yolov5s.pt', help='初始化网络权重文件的路径')
+    parser.add_argument('--cfg', type=str, default=ROOT / 'core/models/yolov5s_seg.yaml', help='网络模型配置文件 model.yaml 的位置')
     parser.add_argument('--data', type=str, default=ROOT / 'core/data/blind.yaml', help='data.yaml 路径')
     parser.add_argument('--hyp', type=str, default=ROOT / 'core/hyp/scratch.yaml', help='超参数路径')
     parser.add_argument('--epochs', type=int, default=300)

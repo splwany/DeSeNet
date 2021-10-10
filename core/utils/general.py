@@ -330,14 +330,20 @@ def check_dataset(data, autodownload=True):
     path = extract_dir or Path(data.get('path') or '')  # optional 'path' default to '.'
     for k in 'train', 'val', 'test':
         if data.get(k):  # prepend path
-            data[k] = str(path / data[k]) if isinstance(data[k], str) else [str(path / x) for x in data[k]]
+            data[k] = (path / data[k]) if isinstance(data[k], str) else [(path / x) for x in data[k]]
 
-    assert 'nc' in data, "Dataset 'nc' key missing."
-    if 'names' not in data:
-        data['names'] = [f'class{i}' for i in range(data['nc'])]  # assign class names if missing
+    assert 'de' in data, "Dataset detection missing."
+    assert 'se' in data, "Dataset segmentation missing."
+    de_dataset, se_dataset = data['de'], data['se']
+    assert 'nc' in de_dataset, "Detection dataset 'nc' key missing."
+    assert 'nc' in se_dataset, "Segmentation dataset 'nc' key missing."
+    if 'names' not in de_dataset:
+        de_dataset['names'] = [f'class{i}' for i in range(de_dataset['nc'])]  # assign class names if missing
+    if 'names' not in se_dataset:
+        se_dataset['names'] = [f'class{i}' for i in range(se_dataset['nc'])]  # assign class names if missing
     train, val, test, s = [data.get(x) for x in ('train', 'val', 'test', 'download')]
     if val:
-        val = [Path(x).resolve() for x in (val if isinstance(val, list) else [val])]  # val path
+        val = [x.resolve() for x in (val if isinstance(val, list) else [val])]  # val path
         if not all(x.exists() for x in val):
             print('\nWARNING: Dataset not found, nonexistent paths: %s' % [str(x) for x in val if not x.exists()])
             if s and autodownload:  # download script
@@ -348,6 +354,7 @@ def check_dataset(data, autodownload=True):
                     root = path.parent if 'path' in data else '..'  # unzip directory i.e. '../'
                     Path(root).mkdir(parents=True, exist_ok=True)  # create root
                     r = os.system(f'unzip -q {f} -d {root} && rm {f}')  # unzip
+                    print(f'Dataset unzipped to {Path(root).resolve()}')
                 elif s.startswith('bash '):  # bash script
                     print(f'Running {s} ...')
                     r = os.system(s)

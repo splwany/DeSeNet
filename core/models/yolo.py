@@ -16,12 +16,12 @@ if str(ROOT) not in sys.path:
     sys.path.append(str(ROOT))  # to run '$ python *.py' files in subdirectories
 ROOT = ROOT.relative_to(Path.cwd())  # relative
 
-from models.common import *
-from models.experimental import *
-from utils.autoanchor import check_anchor_order
-from utils.general import make_divisible, check_file, set_logging
-from utils.plots import feature_visualization
-from utils.torch_utils import time_sync, fuse_conv_and_bn, model_info, scale_img, initialize_weights, \
+from core.models.common import *
+from core.models.experimental import *
+from core.utils.autoanchor import check_anchor_order
+from core.utils.general import make_divisible, check_file, set_logging
+from core.utils.plots import feature_visualization
+from core.utils.torch_utils import time_sync, fuse_conv_and_bn, model_info, scale_img, initialize_weights, \
     select_device, copy_attr
 
 try:
@@ -248,7 +248,7 @@ class Model(nn.Module):
         else:  # is *.yaml
             import yaml  # for torch hub
             self.yaml_file = Path(cfg).name
-            with open(cfg) as f:
+            with open(cfg, 'r', encoding='utf-8') as f:
                 self.yaml = yaml.safe_load(f)  # model dict
 
         # Define model
@@ -423,7 +423,7 @@ def parse_model(d, ch):  # model_dict, input_channels(3)
             args = [c1, c2, *args[1:]]
             if m in [BottleneckCSP, C3, C3TR, C3Ghost]:
                 args.insert(2, n)  # number of repeats
-                n = 1
+                n = 1  # 置 1 表示深度对这三个模块是控制子结构重复，而不是本身重复
         elif m is nn.BatchNorm2d:
             args = [ch[f]]
         elif m is Concat:
@@ -432,6 +432,11 @@ def parse_model(d, ch):  # model_dict, input_channels(3)
             args.append([ch[x] for x in f])
             if isinstance(args[1], int):  # number of anchors
                 args[1] = [list(range(args[1] * 2))] * len(f)
+        elif m in [SegMaskLab, SegMaskBase, SegMaskPSP]:  # 语义分割头
+            args[1] = max(round(args[1] * gd), 1) if args[1] > 1 else args[1]  # SegMask 中 C3 的 n (Lab 里用来控制 ASPP 砍多少通道)
+            args[2] = make_divisible(args[2] * gw, 8)  # SegMask C3 (或其他可放缩子结构) 的输出通道数
+            args.append([ch[x] for x in f])
+            # n = 1  # 不用设 1 了，SegMask 自己配置文件的 n 永远为 1
         elif m is Contract:
             c2 = ch[f] * args[0] ** 2
         elif m is Expand:
@@ -443,7 +448,7 @@ def parse_model(d, ch):  # model_dict, input_channels(3)
         t = str(m)[8:-2].replace('__main__.', '')  # module type
         params_number = sum([x.numel() for x in m_.parameters()])  # number params
         m_.i, m_.f, m_._type, m_.np = i, f, t, params_number  # attach index, 'from' index, type, number params
-        LOGGER.info('%3s%18s%3s%10.0f  %-40s%-30s' % (i, f, n_, np, t, args))  # print
+        LOGGER.info('%3s%18s%3s%10.0f  %-40s%-30s' % (i, f, n_, params_number, t, args))  # print
         save.extend(x % i for x in ([f] if isinstance(f, int) else f) if x != -1)  # append to savelist
         layers.append(m_)
         if i == 0:

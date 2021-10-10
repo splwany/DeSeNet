@@ -3,14 +3,12 @@
 Common modules
 """
 
-from typing import List, Union
-from core.utils.general import is_ascii
-from core.models.experimental import GhostBottleneck
 import logging
 import math
 import warnings
 from copy import copy
 from pathlib import Path
+from typing import List, Union
 
 import numpy as np
 import pandas as pd
@@ -18,13 +16,15 @@ import requests
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from core.utils.general import is_ascii
 from PIL import Image
 from torch.cuda import amp
-
-from utils.mixed_datasets import exif_transpose, letterbox
-from utils.general import non_max_suppression, make_divisible, scale_coords, increment_path, xyxy2xywh, save_one_box, colorstr
-from utils.plots import colors, plot_one_box, Annotator
-from utils.torch_utils import time_sync
+from core.utils.general import (colorstr, increment_path, make_divisible,
+                           non_max_suppression, save_one_box, scale_coords,
+                           xyxy2xywh)
+from core.utils.mixed_datasets import exif_transpose, letterbox
+from core.utils.plots import Annotator, colors, plot_one_box
+from core.utils.torch_utils import time_sync
 
 LOGGER = logging.getLogger(__name__)
 
@@ -50,6 +50,7 @@ class Conv(nn.Module):
         self.act = nn.SiLU() if act is True else (act if isinstance(act, nn.Module) else nn.Identity())
 
     def forward(self, x):
+        print('========================', x.shape)
         return self.act(self.bn(self.conv(x)))
 
     def forward_fuse(self, x):
