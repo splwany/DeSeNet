@@ -7,6 +7,6 @@ Real-time end-to-end network for Object Detection &amp; Semantic Segmentation
 
 ## Dataset
 
-Unzip the ZIP to folder `datasets`
+Unzip the ZIP file to `datasets` folder
 
 [blind dataset (access code：bc1d)](https://cloud.189.cn/web/share?code=zi2iAzbUvequ)
