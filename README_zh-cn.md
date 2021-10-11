@@ -13,6 +13,36 @@
 
 ## DeSeNet 网络结构
 
+```
+               from  n    params  module                                  arguments
+  0                -1  1      3520  core.models.common.Focus                [3, 32, 3]
+  1                -1  1     18560  core.models.common.Conv                 [32, 64, 3, 2]
+  2                -1  1     18816  core.models.common.C3                   [64, 64, 1]
+  3                -1  1     73984  core.models.common.Conv                 [64, 128, 3, 2]
+  4                -1  3    156928  core.models.common.C3                   [128, 128, 3]
+  5                -1  1    295424  core.models.common.Conv                 [128, 256, 3, 2]
+  6                -1  3    625152  core.models.common.C3                   [256, 256, 3]
+  7                -1  1   1180672  core.models.common.Conv                 [256, 512, 3, 2]
+  8                -1  1    656896  core.models.common.SPP                  [512, 512, [5, 9, 13]]        
+  9                -1  1   1182720  core.models.common.C3                   [512, 512, 1, False]
+ 10                -1  1    131584  core.models.common.Conv                 [512, 256, 1, 1]
+ 11                -1  1         0  torch.nn.modules.upsampling.Upsample    [None, 2, 'nearest']
+ 12           [-1, 6]  1         0  core.models.common.Concat               [1]
+ 13                -1  1    361984  core.models.common.C3                   [512, 256, 1, False]
+ 14                -1  1     33024  core.models.common.Conv                 [256, 128, 1, 1]
+ 15                -1  1         0  torch.nn.modules.upsampling.Upsample    [None, 2, 'nearest']
+ 16           [-1, 4]  1         0  core.models.common.Concat               [1]
+ 17                -1  1     90880  core.models.common.C3                   [256, 128, 1, False]
+ 18                -1  1    147712  core.models.common.Conv                 [128, 128, 3, 2]
+ 19          [-1, 14]  1         0  core.models.common.Concat               [1]
+ 20                -1  1    296448  core.models.common.C3                   [256, 256, 1, False]
+ 21                -1  1    590336  core.models.common.Conv                 [256, 256, 3, 2]
+ 22          [-1, 10]  1         0  core.models.common.Concat               [1]
+ 23                -1  1   1182720  core.models.common.C3                   [512, 512, 1, False]
+ 24      [16, 19, 22]  1    670082  core.models.yolo.SegMaskPSP             [2, 1, 128, False, [256, 256, 512]]
+ 25      [17, 20, 23]  1     29667  core.models.yolo.Detect                 [6, [[10, 13, 16, 30, 33, 23], [30, 61, 62, 45, 59, 119], [116, 90, 156, 198, 373, 326]], [128, 256, 512]]
+```
+
 ### 1. YOLOv5s 网络结构
 
 ![preview](https://pic1.zhimg.com/v2-15e53f82f68e62ce1ea9a565121e21f8_r.jpg)
