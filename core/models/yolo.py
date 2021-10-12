@@ -44,13 +44,13 @@ class SegMaskBiSe(nn.Module):  # 配置文件输入[16, 19, 22]通道无效
             Conv(self.c_in8, 128, k=1, s=1),
         )
         self.m16 = nn.Sequential(
-            RFB2(self.c_in16, 128, map_reduce=4, d=[2,3], has_globel=False),  # 魔改模块(和RFB没啥关系了,原则是增强分割入口非线性,同时扩大感受野和兼顾多尺度)，实验速度精度效果还不错
+            RFB2(self.c_in16, 128, map_reduce=4, d=[2,3], has_global=False),  # 魔改模块(和RFB没啥关系了,原则是增强分割入口非线性,同时扩大感受野和兼顾多尺度)，实验速度精度效果还不错
             # Attention(128),  # 可选，这层与1/32up相加，有相加处用Attention也是BiSeNet的ARM模块设计的初衷。前面有复杂模块，Attention就够了，没必要用ARM多个3*3计算量，核心目的是一样的
             # ARM(128, 128),
         )
         self.m32 = nn.Sequential(
-            RFB2(self.c_in32, 128, map_reduce=8, d=[2,3], has_globel=True),  # 舍弃原GP，在1/32(和1/16，可选)处加全局特征
-            # Attention(128),  # 改变了globel特征的获取方式，这层不用和globel特征相加，因此没必要用ARM或者Attention
+            RFB2(self.c_in32, 128, map_reduce=8, d=[2,3], has_global=True),  # 舍弃原GP，在1/32(和1/16，可选)处加全局特征
+            # Attention(128),  # 改变了global特征的获取方式，这层不用和globel特征相加，因此没必要用ARM或者Attention
             # ARM(128, 128),
         )
         # self.GP = nn.Sequential(
@@ -109,10 +109,10 @@ class SegMaskLab(nn.Module):  #   配置文件[3, 16, 19, 22], 通道配置无�
             # hid砍得越少精度越高(这里问题在容量)，maep_reduce=1相当于标准ASPP
             # 未使用全局，一方面遵照论文，一方面用了全局后出现边界破碎的情况
             Conv(self.c_in16, c_hid*2, k=1),
-            ASPP(c_hid*2, 256, d=[3, 6, 9], has_globel=False, map_reduce=5-n),  # ASPP确实好，但是太重了，砍到了1/4通道 s:5-1=4, m:5-2=3, l:5-3=2
+            ASPP(c_hid*2, 256, d=[3, 6, 9], has_global=False, map_reduce=5-n),  # ASPP确实好，但是太重了，砍到了1/4通道 s:5-1=4, m:5-2=3, l:5-3=2
             # 这两个都是ASPP的替代品, ASPP也有一个问题，光一个ASPP不够深，ASPPs和RFB1中间输入一起砍，ASPPs砍完可以选择前面加其他模块，RFB1砍后增加了3*3和5*5
-            # ASPPs(256, 256, d=[4, 7, 10], has_globel=False, map_reduce=5-n), # 
-            # RFB1(self.c_in16, 256, d=[3, 5, 7], has_globel=False, map_reduce=max(4-n, 2)),
+            # ASPPs(256, 256, d=[4, 7, 10], has_global=False, map_reduce=5-n), # 
+            # RFB1(self.c_in16, 256, d=[3, 5, 7], has_global=False, map_reduce=max(4-n, 2)),
             nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True),
         )
         self.decoder = nn.Sequential(
@@ -161,6 +161,19 @@ class SegMaskPSP(nn.Module):  # PSP头，多了RFB2和FFM，同样砍了通道�
         self.c_in32 = ch[2]  # 22
         # self.c_aux = ch[0]  # 辅助损失  找不到合适地方放辅助，放弃
         self.c_out = n_segcls
+        
+        self.m8 = nn.Sequential(
+            Conv(self.c_in8, c_hid, k=1),
+        )
+        self.m16 = nn.Sequential(
+            Conv(self.c_in16, c_hid, k=1),
+            nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True),
+        )
+        self.m32 = nn.Sequential(
+            Conv(self.c_in32, c_hid, k=1),
+            nn.Upsample(scale_factor=4, mode='bilinear', align_corners=True),
+        )
+        
         # 注意配置文件通道写256,此时s模型c_hid＝128
         self.out = nn.Sequential(  # 实验表明引入较浅非线性不太强的层做分割会退化成检测的辅助(分割会相对低如72退到70,71，检测会明显升高)，PP前应加入非线性强一点的层并适当扩大感受野
             RFB2(c_hid*3, c_hid, d=[2,3], map_reduce=6),  # 3*128//6=64　RFB2和RFB无关，仅仅是历史遗留命名(训完与训练模型效果不错就没有改名重训了)
@@ -169,23 +182,14 @@ class SegMaskPSP(nn.Module):  # PSP头，多了RFB2和FFM，同样砍了通道�
             nn.Conv2d(c_hid, self.c_out, kernel_size=1, padding=0),
             nn.Upsample(scale_factor=8, mode='bilinear', align_corners=True),
         )
-        self.m8 = nn.Sequential(
-            Conv(self.c_in8, c_hid, k=1),
-        )
-        self.m32 = nn.Sequential(
-            Conv(self.c_in32, c_hid, k=1),
-            nn.Upsample(scale_factor=4, mode='bilinear', align_corners=True),
-        )
-        self.m16 = nn.Sequential(
-            Conv(self.c_in16, c_hid, k=1),
-            nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True),
-        )
+        
         # self.aux = nn.Sequential(
         #     Conv(self.c_aux, 256, 3),  
         #     nn.Dropout(0.1, False), 
         #     nn.Conv2d(256, self.c_out, kernel_size=1),
         #     nn.Upsample(scale_factor=8, mode='bilinear', align_corners=True),
         # )
+
     def forward(self, x):
         # 这个头三层融合输入做过消融实验，单独16:72.6 三层融合:73.5, 建议所有用1/8的头都采用三层融合，在Lab的实验显示三层融合的1/16输入也有增长
         feat = torch.cat([self.m8(x[0]), self.m16(x[1]), self.m32(x[2])], 1)

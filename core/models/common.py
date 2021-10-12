@@ -223,7 +223,7 @@ class ARM(nn.Module):   # AttentionRefinementModule
 class FFM(nn.Module):  # FeatureFusionModule  reduction用来控制瓶颈结构
     def __init__(self, in_chan, out_chan, reduction=1, is_cat=True, k=1):
         super(FFM, self).__init__()
-        self.convblk = Conv(in_chan, out_chan, k=k, s=1, p=None)  ## 注意力处用了１＊１瓶颈，两个卷积都不带bn,一个带普通激活，一个sigmoid
+        self.convblk = Conv(in_chan, out_chan, k=k, s=1)  ## 注意力处用了１＊１瓶颈，两个卷积都不带bn,一个带普通激活，一个sigmoid
         self.channel_attention = nn.Sequential(nn.AdaptiveAvgPool2d(1),
                                                nn.Conv2d(out_chan, out_chan//reduction,
                                                          kernel_size = 1, stride = 1, padding = 0, bias = False),
@@ -267,9 +267,9 @@ class FFM(nn.Module):  # FeatureFusionModule  reduction用来控制瓶颈结构
 
 
 class ASPP(nn.Module):  # ASPP，原版没有hid，为了灵活性方便砍通道增加hid，hid和out一样就是原版
-    def __init__(self, in_planes, out_planes, d=[3, 6, 9], has_globel=True, map_reduce=4):
+    def __init__(self, in_planes, out_planes, d=[3, 6, 9], has_global=True, map_reduce=4):
         super(ASPP, self).__init__()
-        self.has_globel = has_globel
+        self.has_global = has_global
         self.hid = in_planes//map_reduce
 
         self.branch0 = nn.Sequential(
@@ -290,19 +290,19 @@ class ASPP(nn.Module):  # ASPP，原版没有hid，为了灵活性方便砍通�
                 nn.BatchNorm2d(self.hid),
                 nn.SiLU()    
                 )
-        if self.has_globel:
+        if self.has_global:
             self.branch4 = nn.Sequential(
                 nn.AdaptiveAvgPool2d(1),
                 Conv(in_planes, self.hid, k=1),
                 )
-        self.ConvLinear = Conv(int(5*self.hid) if has_globel else int(4*self.hid), out_planes, k=1, s=1)
+        self.ConvLinear = Conv(int(5*self.hid) if has_global else int(4*self.hid), out_planes, k=1, s=1)
 
     def forward(self, x):
         x0 = self.branch0(x)
         x1 = self.branch1(x)
         x2 = self.branch2(x)
         x3 = self.branch3(x)
-        if not self.has_globel:
+        if not self.has_global:
             out = self.ConvLinear(torch.cat([x0,x1,x2,x3],1))
             return out
         else:
@@ -312,9 +312,9 @@ class ASPP(nn.Module):  # ASPP，原版没有hid，为了灵活性方便砍通�
 
 
 class ASPPs(nn.Module):  # 空洞卷积前先用1*1砍通道到目标（即相比上面版本空洞卷积的输入通道减少，一个1*1统一砍通道试过效果不好，每个分支1*1独立,1*1分支改3*3）
-    def __init__(self, in_planes, out_planes, d=[3, 6, 9], has_globel=True, map_reduce=4):
+    def __init__(self, in_planes, out_planes, d=[3, 6, 9], has_global=True, map_reduce=4):
         super(ASPPs, self).__init__()
-        self.has_globel = has_globel
+        self.has_global = has_global
         self.hid = in_planes//map_reduce
 
         self.branch0 = nn.Sequential(
@@ -339,19 +339,19 @@ class ASPPs(nn.Module):  # 空洞卷积前先用1*1砍通道到目标（即相�
                 nn.BatchNorm2d(self.hid),
                 nn.SiLU()    
                 )
-        if self.has_globel:
+        if self.has_global:
             self.branch4 = nn.Sequential(
                 nn.AdaptiveAvgPool2d(1),
                 Conv(in_planes, self.hid, k=1),
                 )
-        self.ConvLinear = Conv(int(5*self.hid) if has_globel else int(4*self.hid), out_planes, k=1, s=1)
+        self.ConvLinear = Conv(int(5*self.hid) if has_global else int(4*self.hid), out_planes, k=1, s=1)
 
     def forward(self, x):
         x0 = self.branch0(x)
         x1 = self.branch1(x)
         x2 = self.branch2(x)
         x3 = self.branch3(x)
-        if not self.has_globel:
+        if not self.has_global:
             out = self.ConvLinear(torch.cat([x0,x1,x2,x3],1))
             return out
         else:
@@ -450,10 +450,10 @@ class DAPPM(nn.Module):
 
 # 和ASPPs类似(初衷都是为了砍ASPP计算量，这个模块砍中间和输入通道增加3*3卷积补偿;ASPPs砍中间和输入通道，没有多的操作，同延时下可以少砍一点)
 class RFB1(nn.Module):  # 魔改ASPP和RFB,这个模块其实长得更像ASPP,相比RFB少shortcut,３＊３没有宽高分离,d没有按照RFB设置;相比ASPP多了1*1砍输入通道和3*3卷积
-    def __init__(self, in_planes, out_planes, map_reduce=4, d=[3, 5, 7], has_globel=False):
+    def __init__(self, in_planes, out_planes, map_reduce=4, d=[3, 5, 7], has_global=False):
         super(RFB1, self).__init__()
         self.out_channels = out_planes
-        self.has_globel = has_globel
+        self.has_global = has_global
         inter_planes = in_planes // map_reduce
 
         self.branch0 = nn.Sequential(
@@ -481,19 +481,19 @@ class RFB1(nn.Module):  # 魔改ASPP和RFB,这个模块其实长得更像ASPP,�
                 nn.BatchNorm2d(inter_planes),
                 nn.SiLU()    
                 )
-        if self.has_globel:
+        if self.has_global:
             self.branch4 = nn.Sequential(
                 nn.AdaptiveAvgPool2d(1),
                 Conv(in_planes, inter_planes, k=1),
                 )
-        self.Fusion = Conv(int(5*inter_planes) if has_globel else int(4*inter_planes), out_planes, k=1, s=1)
+        self.Fusion = Conv(int(5*inter_planes) if has_global else int(4*inter_planes), out_planes, k=1, s=1)
 
     def forward(self, x):
         x0 = self.branch0(x)
         x1 = self.branch1(x)
         x2 = self.branch2(x)
         x3 = self.branch3(x)
-        if not self.has_globel:
+        if not self.has_global:
             out = self.Fusion(torch.cat([x0,x1,x2,x3], 1))
             return out
         else:
@@ -503,10 +503,10 @@ class RFB1(nn.Module):  # 魔改ASPP和RFB,这个模块其实长得更像ASPP,�
 
 
 class RFB2(nn.Module):  # 魔改模块,除了历史遗留(改完训练模型精度不错，不想改名重训)名字叫RFB，其实和RFB没啥关系了(参考deeplabv3的反面级联结构，也有点像CSP，由于是级联，d设置参考论文HDC避免网格效应)实验效果不错，能满足较好非线性、扩大感受野、多尺度融合的初衷(在bise中单个精度和多个其他模块组合差不多，速度和C3相近比ASPP之类的快)
-    def __init__(self, in_planes, out_planes, map_reduce=4, d=[2, 3], has_globel=False):  # 第一个3*3的d相当于1，典型的设置1,2,3; 1,2,5; 1,3,5
+    def __init__(self, in_planes, out_planes, map_reduce=4, d=[2, 3], has_global=False):  # 第一个3*3的d相当于1，典型的设置1,2,3; 1,2,5; 1,3,5
         super(RFB2, self).__init__()
         self.out_channels = out_planes
-        self.has_globel = has_globel
+        self.has_global = has_global
         inter_planes = in_planes // map_reduce
 
         self.branch0 = nn.Sequential(
@@ -526,19 +526,19 @@ class RFB2(nn.Module):  # 魔改模块,除了历史遗留(改完训练模型精�
         self.branch3 = nn.Sequential(
                 Conv(in_planes, inter_planes, k=1, s=1),  
                 )
-        if self.has_globel:
+        if self.has_global:
             self.branch4 = nn.Sequential(
                 nn.AdaptiveAvgPool2d(1),
                 Conv(inter_planes, inter_planes, k=1),
                 )
-        self.ConvLinear = Conv(int(5*inter_planes) if has_globel else int(4*inter_planes), out_planes, k=1, s=1)
+        self.ConvLinear = Conv(int((5 if has_global else 4) * inter_planes), out_planes, k=1, s=1)
 
     def forward(self, x):  # 思路就是rate逐渐递进的空洞卷积连续卷扩大感受野避免使用rate太大的卷积(级联注意rate要满足HDC公式且不应该有非1公倍数，空洞卷积网格效应)，多个并联获取多尺度特征
         x3 = self.branch3(x)  # １＊１是独立的　类似C3，区别在于全部都会cat
         x0 = self.branch0(x)
         x1 = self.branch1(x0)
         x2 = self.branch2(x1)
-        if not self.has_globel:
+        if not self.has_global:
             out = self.ConvLinear(torch.cat([x0,x1,x2,x3],1))
         else:
             x4 = F.interpolate(self.branch4(x2), (x.shape[2], x.shape[3]), mode='nearest')  # 全局
