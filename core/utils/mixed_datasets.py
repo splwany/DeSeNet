@@ -6,7 +6,7 @@ import os
 import random
 import shutil
 from itertools import repeat
-from multiprocessing.pool import ThreadPool, Pool
+from multiprocessing.dummy import Pool as ThreadPool
 from pathlib import Path
 from typing import List, Tuple
 
@@ -282,8 +282,8 @@ class LoadImagesAndLabels(Dataset):  # for training/testing
         # 缓存数据集标注，检查图片并读取形状
         x = {}  # dict
         nm, nf, ne, nc, msgs = 0, 0, 0, 0, []  # number missing, found, empty, corrupted, messages
-        desc = f"{prefix}正在扫描 '{path.parent / path.stem}' 中的图片和标注... "
-        with Pool(NUM_THREADS) as pool:
+        desc = f"{prefix}正在扫描 '{path.parent}({path.stem})' 中的图片和标注... "
+        with ThreadPool(NUM_THREADS) as pool:
             pbar = tqdm(pool.imap(verify_image_label, zip(self.img_files, self.de_label_files, self.se_label_files, repeat(prefix))), desc=desc, total=len(self.img_files))
             for im_file, det_labels_f, seg_labels_f, shape, nm_f, nf_f, ne_f, nc_f, msg in pbar:
                 nm += nm_f
@@ -795,9 +795,10 @@ def verify_image_label(args):
                 assert all([(item[1:] <= 1).all() for item in l]), '未归一化或超出坐标限制'
                 seg_labels = np.array([[int(item[0]), np.array(item[1:], dtype=np.float32)] for item in l], dtype=object)
                 seg_labels[:, 1] = [item.reshape(-1, 2) for item in seg_labels[:, 1]]
-
+        # print(im_file, shape, nm, nf, ne, nc, msg)
         return im_file, det_labels, seg_labels, shape, nm, nf, ne, nc, msg
     except Exception as e:
         nc = 1
         msg = f'{prefix}警告：正在忽略损坏的图片与标注 {im_file}: {e}'
+        print(None, None, nm, nf, ne, nc, msg)
         return None, None, None, None, nm, nf, ne, nc, msg
