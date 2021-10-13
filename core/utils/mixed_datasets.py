@@ -795,10 +795,8 @@ def verify_image_label(args):
                 assert all([(item[1:] <= 1).all() for item in l]), '未归一化或超出坐标限制'
                 seg_labels = np.array([[int(item[0]), np.array(item[1:], dtype=np.float32)] for item in l], dtype=object)
                 seg_labels[:, 1] = [item.reshape(-1, 2) for item in seg_labels[:, 1]]
-        # print(im_file, shape, nm, nf, ne, nc, msg)
         return im_file, det_labels, seg_labels, shape, nm, nf, ne, nc, msg
     except Exception as e:
         nc = 1
         msg = f'{prefix}警告：正在忽略损坏的图片与标注 {im_file}: {e}'
-        print(None, None, nm, nf, ne, nc, msg)
         return None, None, None, None, nm, nf, ne, nc, msg
