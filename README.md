@@ -103,11 +103,11 @@
 
 ### 2. Segmentation 模块
 
-![](https://github.com/splwany/DeSeNet/blob/main/docs/images/DeSeNet_Structure.png)
+![](https://github.com/splwany/DeSeNet/blob/main/docs/images/DeSeNet网络结构.png)
 
 #### 2.1 SegMaskPSP(n_segcls=2, n=1, c_hide=256, shortcut=False, ch=()) 语义分割检测头
 
-![](https://github.com/splwany/DeSeNet/blob/main/docs/images/SegMaskPSP_Structure.png)
+![](https://github.com/splwany/DeSeNet/blob/main/docs/images/SegMaskPSP结构.png)
 
 接收三个输入，根据配置文件，分别来自第16层、19层、22层；
 
