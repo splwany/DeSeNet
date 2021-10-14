@@ -538,10 +538,10 @@ class RFB2(nn.Module):  # 魔改模块,除了历史遗留(改完训练模型精�
         x1 = self.branch1(x0)
         x2 = self.branch2(x1)
         if not self.has_global:
-            out = self.ConvLinear(torch.cat([x0,x1,x2,x3],1))
+            out = self.ConvLinear(torch.cat([x0,x1,x2,x3], 1))
         else:
             x4 = F.interpolate(self.branch4(x2), (x.shape[2], x.shape[3]), mode='nearest')  # 全局
-            out = self.ConvLinear(torch.cat([x0,x1,x2,x3,x4],1))
+            out = self.ConvLinear(torch.cat([x0,x1,x2,x3,x4], 1))
         return out
 
 
