@@ -229,8 +229,8 @@ class LoadImagesAndLabels(Dataset):  # for training/testing
         # 读取缓存文件
         [cache.pop(k) for k in ('hash', 'version', 'msgs')]  # 移除元素
         self._cache_items = list(cache.items())
-        # TODO 下面这行可能不需要在 init 时运行
-        # self.img_files, self.shapes, self.det_labels, self.seg_labels = self.reshuffle()
+        # TODO 下面这行可能不需要在 init 时运行，但也不一定哈哈哈
+        self.img_files, self.shapes, self.det_labels, self.seg_labels = self.reshuffle()
         self.de_label_files, self.se_label_files = img2label_paths(cache.keys())  # update
         if single_cls:
             for d, s in zip(self.det_labels, self.seg_labels):

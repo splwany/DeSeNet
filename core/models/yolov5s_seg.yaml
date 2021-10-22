@@ -2,7 +2,7 @@
 
 # Parameters
 de_nc: 6  # number of det classes
-se_nc: 2  # number of seg classes
+se_nc: 3  # number of seg classes
 depth_multiple: 0.33  # model depth multiple
 width_multiple: 0.50  # layer channel multiple
 anchors:

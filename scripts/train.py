@@ -35,7 +35,7 @@ ROOT = ROOT.relative_to(Path.cwd())  # relative
 
 from core.models.experimental import attempt_load
 from core.models.yolo import Model
-from core.utils.datasets import InfiniteDataLoader
+from core.utils.mixed_datasets import InfiniteDataLoader
 from core.utils.autoanchor import check_anchors
 from core.utils.callbacks import Callbacks
 from core.utils.general import (check_dataset, check_file, check_git_status,
@@ -49,7 +49,7 @@ from core.utils.general import (check_dataset, check_file, check_git_status,
 from core.utils.google_utils import attempt_download
 from core.utils.loggers import Loggers
 from core.utils.loss import ComputeLoss, SegmentationLosses
-from core.utils.metrics import fitness
+from core.utils.metrics import fitness_det_seg
 from core.utils.mixed_datasets import create_mixed_dataloader
 from core.utils.plots import colors, plot_labels, plot_one_box
 from core.utils.torch_utils import (EarlyStopping, ModelEMA, de_parallel,
@@ -233,7 +233,7 @@ def train(hyp, opt, device: torch.device, callbacks):
 
     # Process 0
     if RANK in [-1, 0]:
-        val_loader, _ = create_mixed_dataloader(val_path, imgsz, batch_size // WORLD_SIZE, gs, single_cls,
+        val_loader = create_mixed_dataloader(val_path, imgsz, batch_size // WORLD_SIZE, gs, single_cls,
                                                 hyp=hyp, rect=True, rank=-1,
                                                 workers=workers, pad=0.5,
                                                 prefix=colorstr('val: '))[0]
@@ -306,7 +306,7 @@ def train(hyp, opt, device: torch.device, callbacks):
             assert isinstance(train_loader.sampler, torch_data.distributed.DistributedSampler)
             train_loader.sampler.set_epoch(epoch)  # shuffle时，保证每个epoch顺序不同
         pbar = enumerate(train_loader)
-        LOGGER.info(('\n' + '%10s' * 7) % ('Epoch', 'gpu_men', 'box', 'obj', 'cls', 'labels', 'img_size'))
+        LOGGER.info(('\n' + '%10s' * 8) % ('Epoch', 'gpu_men', 'box', 'obj', 'cls', 'seg', 'labels', 'img_size'))
         if RANK in [-1, 0]:
             pbar = tqdm(pbar, total=nb)  # 进度条
         optimizer.zero_grad()
@@ -372,7 +372,7 @@ def train(hyp, opt, device: torch.device, callbacks):
                 seg_loss = compute_seg_loss(seg_pred, seg_labels.to(device))
                 if RANK != -1:
                     det_loss *= WORLD_SIZE  # gradient averaged between devices in DDP mode
-                    seg_loss *= batch_size
+                    seg_loss *= WORLD_SIZE ** 2  # TODO 是否是乘 batch_size
                 if opt.quad:
                     det_loss *= 4.
                     seg_loss *= 4.
@@ -380,7 +380,7 @@ def train(hyp, opt, device: torch.device, callbacks):
                 seg_loss *= seggain  # 语义分割的比例
 
             # Backward
-            scaler.scale(det_loss).backward()
+            scaler.scale(det_loss).backward(retain_graph=True)
             scaler.scale(seg_loss).backward()
 
             # Optimize
@@ -396,24 +396,27 @@ def train(hyp, opt, device: torch.device, callbacks):
             # TODO 缺少语义分割部分
             if RANK in [-1, 0]:
                 mloss = (mloss * i + det_loss_items) / (i + 1)  # update mean losses
-                msegloss = (msegloss * i + seg_loss.detach() / batch_size) / (i + 1)
+                msegloss = (msegloss * i + seg_loss.detach()) / (i + 1)  # update mean seglosses
                 mem = f'{torch.cuda.memory_reserved() / 1E9 if torch.cuda.is_available() else 0:.3g}G'  # (GB)
-                pbar.set_description(('%10s' * 2 + '%10.4g' * 7) % (
+                pbar.set_description(('%10s' * 2 + '%10.4g' * 6) % (
                     f'{epoch}/{epochs - 1}', mem, *mloss, msegloss, det_labels.shape[0], imgs.shape[-1]))
                 callbacks.run('on_train_batch_end', ni, model, imgs, det_labels, paths, plots, opt.sync_bn)
             # end batch ------------------------------------------------------------------------------------------------
 
         # Scheduler
         lr = [x['lr'] for x in optimizer.param_groups]  # for loggers
-        scheduler.step()  # 更新Scheduler
+        scheduler.step()  # 更新 Scheduler
 
         # DDP process 0 or single-GPU
         if RANK in [-1, 0]:
             # mAP
             callbacks.run('on_train_epoch_end', epoch=epoch)
             ema.update_attr(model, include=['yaml', 'nc', 'hyp', 'names', 'stride', 'class_weights'])
+            # TODO pixACC, mIoU
+            if epoch % 10 == 0 or (epochs - epoch) < 40:
+                mIoU = val.seg_validation(model=ema.ema, valloader=val_loader, device=device, n_segcls=3, half_precision=True)
             final_epoch = (epoch + 1 == epochs) or stopper.possible_stop
-            if not noval or final_epoch:  # Calculate mAP
+            if not noval or final_epoch:  # 计算 mAP
                 results, maps, _ = val.run(data_dict,
                                            batch_size=batch_size // WORLD_SIZE * 2,
                                            imgsz=imgsz,
@@ -426,7 +429,7 @@ def train(hyp, opt, device: torch.device, callbacks):
                                            compute_loss=compute_loss)
 
             # Update best mAP
-            fi = fitness(np.array(results).reshape(1, -1))  # weighted combination of [P, R, mAP@.5, mAP@.5-.95]
+            fi = fitness_det_seg(np.array(results).reshape(1, -1), mIoU)  # weighted combination of [P, R, mAP@.5, mAP@.5-.95] 按0.1*AP.5+0.9*AP.5:.95指标衡量模型
             if fi > best_fitness:
                 best_fitness = fi
             log_vals = list(mloss) + list(results) + lr
@@ -471,7 +474,7 @@ def train(hyp, opt, device: torch.device, callbacks):
     # end training -----------------------------------------------------------------------------------------------------
     if RANK in [-1, 0]:
         LOGGER.info(f'\n{epoch - start_epoch + 1} epochs completed in {(time.time() - t0) / 3600:.3f} hours.')
-        for f in last, best:
+        for f in (last, best):
             if f.exists():
                 strip_optimizer(f)  # strip optimizers
                 if f is best:

@@ -23,15 +23,58 @@ if str(ROOT) not in sys.path:
     sys.path.append(str(ROOT))  # add ROOT to PATH
 ROOT = ROOT.relative_to(Path.cwd())  # relative
 
+import torch.nn.functional as F
 from core.models.experimental import attempt_load
+from core.utils.callbacks import Callbacks
 from core.utils.datasets import create_dataloader
-from core.utils.general import coco80_to_coco91_class, check_dataset, check_img_size, check_requirements, \
-    check_suffix, check_yaml, box_iou, non_max_suppression, scale_coords, xyxy2xywh, xywh2xyxy, set_logging, \
-    increment_path, colorstr, print_args
-from core.utils.metrics import ap_per_class, ConfusionMatrix
+from core.utils.general import (box_iou, check_dataset, check_img_size,
+                                check_requirements, check_suffix, check_yaml,
+                                coco80_to_coco91_class, colorstr,
+                                increment_path, non_max_suppression,
+                                print_args, scale_coords, set_logging,
+                                xywh2xyxy, xyxy2xywh)
+from core.utils.metrics import (ConfusionMatrix, ap_per_class,  # 后两个新增分割
+                                batch_intersection_union, batch_pix_accuracy)
 from core.utils.plots import output_to_target, plot_images, plot_val_study
 from core.utils.torch_utils import select_device, time_sync
-from core.utils.callbacks import Callbacks
+
+
+def seg_validation(model, n_segcls, valloader, device, half_precision=True):
+    # Fast test during the training
+    def eval_batch(model, image, target, half):
+        outputs = model(image)
+        # outputs = gather(outputs, 0, dim=0)
+        pred = outputs[1]  # 1是分割
+        target = target.to(device, non_blocking=True)
+        pred = F.interpolate(pred, (target.shape[1], target.shape[2]), mode='bilinear', align_corners=True)
+        correct, labeled = batch_pix_accuracy(pred.data, target)
+        inter, union = batch_intersection_union(pred.data, target, n_segcls)
+        return correct, labeled, inter, union
+
+    half = device.type != 'cpu' and half_precision  # half precision only supported on CUDA
+    if half:
+        model.half()
+    model.eval()
+    total_inter, total_union, total_correct, total_label = 0, 0, 0, 0
+    tbar = tqdm(valloader, desc='\r')
+    mIoU = None
+    for i, (image, _, target, _, _) in enumerate(tbar):
+        image = image.to(device, non_blocking=True)
+        image = image.half() if half else image.float()
+        with torch.no_grad():
+            correct, labeled, inter, union = eval_batch(model, image, target, half)
+
+        total_correct += correct
+        total_label += labeled
+        total_inter += inter
+        total_union += union
+        pixAcc = 1.0 * total_correct / (np.spacing(1) + total_label)
+        IoU = 1.0 * total_inter / (np.spacing(1) + total_union)
+        mIoU = IoU.mean()
+        tbar.set_description(
+            'pixAcc: %.3f, mIoU: %.3f' % (pixAcc, mIoU))
+    # print(mIoU)
+    return mIoU
 
 
 def save_one_txt(predn, save_conf, shape, file):

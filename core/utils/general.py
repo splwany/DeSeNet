@@ -490,7 +490,7 @@ def generate_seg_labels_img(seg_labels, img_hw) -> torch.Tensor:
         flag, mask = _shape_to_mask(img_hw, points)
         if flag:
             cls[mask] = cls_id
-    return torch.tensor(cls)
+    return torch.tensor(cls, dtype=torch.long)
 
 def _shape_to_mask(img_hw, points):
     mask = np.zeros(img_hw, dtype=np.uint8)

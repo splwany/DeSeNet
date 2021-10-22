@@ -23,7 +23,8 @@ de:
 
 # 语义分割数据集
 se:
-  nc: 2  # 类别数
+  nc: 3  # 类别数
   names:  # 类别名
+    - '__background__'
     - 'step'
     - 'shoulder'

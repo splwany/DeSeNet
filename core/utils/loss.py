@@ -7,7 +7,7 @@ import torch
 import torch.nn as nn
 
 from core.utils.metrics import bbox_iou
-from core.utils.torch_utils import is_parallel
+from core.utils.torch_utils import de_parallel
 
 
 def smooth_BCE(eps=0.1):  # https://github.com/ultralytics/yolov3/issues/238#issuecomment-598028441
@@ -102,12 +102,12 @@ class ComputeLoss:
         # Class label smoothing https://arxiv.org/pdf/1902.04103.pdf eqn 3
         self.cp, self.cn = smooth_BCE(eps=h.get('label_smoothing', 0.0))  # positive, negative BCE targets
 
-        # Focal loss
+        # Focal loss 中心损失
         g = h['fl_gamma']  # focal loss gamma
         if g > 0:
             BCEcls, BCEobj = FocalLoss(BCEcls, g), FocalLoss(BCEobj, g)
 
-        det = model.module.model[-1] if is_parallel(model) else model.model[-1]  # Detect() module
+        det = de_parallel(model)[-1]  # Detect() module
         self.balance = {3: [4.0, 1.0, 0.4]}.get(det.nl, [4.0, 1.0, 0.25, 0.06, .02])  # P3-P7
         self.ssi = list(det.stride).index(16) if autobalance else 0  # stride 16 index
         self.BCEcls, self.BCEobj, self.gr, self.hyp, self.autobalance = BCEcls, BCEobj, 1.0, h, autobalance
@@ -115,6 +115,7 @@ class ComputeLoss:
             setattr(self, k, getattr(det, k))
 
     def __call__(self, p, targets):  # predictions, targets, model
+        # print('\np的形状: ', p[0].shape, 'targets的形状: ', targets.shape)
         device = targets.device
         lcls, lbox, lobj = torch.zeros(1, device=device), torch.zeros(1, device=device), torch.zeros(1, device=device)
         tcls, tbox, indices, anchors = self.build_targets(p, targets)  # targets
@@ -228,7 +229,7 @@ class SegmentationLosses(nn.CrossEntropyLoss):
     def __init__(self, se_loss=False, se_weight=0.2, nclass=-1, aux_num=2,
                  aux=False, aux_weight=0.1, weight=None,
                  ignore_index=-1):
-        super(SegmentationLosses, self).__init__(weight, None, ignore_index)
+        super().__init__(weight, None, ignore_index)
         self.se_loss = se_loss
         self.aux = aux
         self.nclass = nclass
@@ -279,3 +280,27 @@ class SegmentationLosses(nn.CrossEntropyLoss):
     #         vect = hist>0
     #         tvect[i] = vect
     #     return tvect
+
+
+class MixSoftmaxCrossEntropyLoss(nn.CrossEntropyLoss):
+    def __init__(self, aux=True, aux_weight=0.2, ignore_index=-1, **kwargs):
+        super().__init__(ignore_index=ignore_index)
+        self.aux = aux
+        self.aux_weight = aux_weight
+
+    def _aux_forward(self, *inputs, **kwargs):
+        *preds, target = tuple(inputs)
+
+        loss = super(MixSoftmaxCrossEntropyLoss, self).forward(preds[0], target)
+        for i in range(1, len(preds)):
+            aux_loss = super(MixSoftmaxCrossEntropyLoss, self).forward(preds[i], target)
+            loss += self.aux_weight * aux_loss
+        return loss
+
+    def forward(self, *inputs, **kwargs):
+        preds, target = tuple(inputs)
+        inputs = tuple(list(preds) + [target])
+        if self.aux:
+            return dict(loss=self._aux_forward(*inputs))
+        else:
+            return dict(loss=super().forward(*inputs))
