@@ -51,7 +51,7 @@ from core.utils.loggers import Loggers
 from core.utils.loss import ComputeLoss, SegmentationLosses
 from core.utils.metrics import fitness_det_seg
 from core.utils.mixed_datasets import create_mixed_dataloader
-from core.utils.plots import colors, plot_labels, plot_one_box
+from core.utils.plots import plot_labels, plot_evolve, plot_one_box, colors
 from core.utils.torch_utils import (EarlyStopping, ModelEMA, de_parallel,
                                     intersect_dicts, select_device,
                                     torch_distributed_zero_first)
@@ -183,6 +183,7 @@ def train(hyp, opt, device: torch.device, callbacks):
 
     # 恢复
     start_epoch, best_fitness = 0, 0.0
+
     if pretrained:
         # 优化器
         if ckpt['optimizer'] is not None:
@@ -292,7 +293,7 @@ def train(hyp, opt, device: torch.device, callbacks):
 
     for epoch in range(start_epoch, epochs):  # epoch -----------------------------------------------------------
         model.train()
-        dataset.reshuffle(1 + RANK + epoch * WORLD_SIZE)  # 重新打乱以确保每轮的随机情况不同
+        # dataset.reshuffle(1 + RANK + epoch * WORLD_SIZE)  # 重新打乱以确保每轮的随机情况不同
         
         # Update image weights (optional, single-GPU only)
         if opt.image_weights:
@@ -393,10 +394,9 @@ def train(hyp, opt, device: torch.device, callbacks):
                 last_opt_step = ni
 
             # Log
-            # TODO 缺少语义分割部分
             if RANK in [-1, 0]:
                 mloss = (mloss * i + det_loss_items) / (i + 1)  # update mean losses
-                msegloss = (msegloss * i + seg_loss.detach()) / (i + 1)  # update mean seglosses
+                msegloss = (msegloss * i + seg_loss.detach() / batch_size) / (i + 1)  # update mean seglosses
                 mem = f'{torch.cuda.memory_reserved() / 1E9 if torch.cuda.is_available() else 0:.3g}G'  # (GB)
                 pbar.set_description(('%10s' * 2 + '%10.4g' * 6) % (
                     f'{epoch}/{epochs - 1}', mem, *mloss, msegloss, det_labels.shape[0], imgs.shape[-1]))
@@ -413,12 +413,11 @@ def train(hyp, opt, device: torch.device, callbacks):
             callbacks.run('on_train_epoch_end', epoch=epoch)
             ema.update_attr(model, include=['yaml', 'nc', 'hyp', 'names', 'stride', 'class_weights'])
             # TODO pixACC, mIoU
-            if epoch % 10 == 0 or (epochs - epoch) < 40:
-                mIoU = val.seg_validation(model=ema.ema, valloader=val_loader, device=device, n_segcls=3, half_precision=True)
+            mIoU = val.seg_validation(model=ema.ema, valloader=val_loader, device=device, n_segcls=3, half_precision=True)
             final_epoch = (epoch + 1 == epochs) or stopper.possible_stop
             if not noval or final_epoch:  # 计算 mAP
                 results, maps, _ = val.run(data_dict,
-                                           batch_size=batch_size // WORLD_SIZE * 2,
+                                           batch_size=batch_size,
                                            imgsz=imgsz,
                                            model=ema.ema,
                                            single_cls=single_cls,
@@ -426,7 +425,7 @@ def train(hyp, opt, device: torch.device, callbacks):
                                            save_dir=save_dir,
                                            plots=False,
                                            callbacks=callbacks,
-                                           compute_loss=compute_loss)
+                                           compute_loss=compute_loss,)
 
             # Update best mAP
             fi = fitness_det_seg(np.array(results).reshape(1, -1), mIoU)  # weighted combination of [P, R, mAP@.5, mAP@.5-.95] 按0.1*AP.5+0.9*AP.5:.95指标衡量模型
@@ -480,7 +479,7 @@ def train(hyp, opt, device: torch.device, callbacks):
                 if f is best:
                     LOGGER.info(f'\nValidating {f}...')
                     results, _, _ = val.run(data_dict,
-                                            batch_size=batch_size // WORLD_SIZE * 2,
+                                            batch_size=batch_size,
                                             imgsz=imgsz,
                                             model=attempt_load(f, device).half(),
                                             iou_thres=0.7,  # best pycocotools results at 0.65
@@ -491,9 +490,9 @@ def train(hyp, opt, device: torch.device, callbacks):
                                             verbose=True,
                                             plots=True,
                                             callbacks=callbacks,
-                                            compute_loss=compute_loss)  # val best model with plots
+                                            compute_loss=compute_loss,)  # val best model with plots
 
-        callbacks.run('on_train_end', last, best, plots, epoch)
+        callbacks.run('on_train_end', last, best, plots, epoch, results)
         LOGGER.info(f"Results saved to {colorstr('bold', save_dir)}")
 
     torch.cuda.empty_cache()
