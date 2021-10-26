@@ -106,7 +106,8 @@ def create_mixed_dataloader(path, imgsz, batch_size, stride, single_cls, hyp=Non
     cpu_count = os.cpu_count()
     nw = min([NUM_THREADS, batch_size if batch_size > 1 else 0, workers])  # workers 数量
     sampler = torch_data.distributed.DistributedSampler(dataset) if rank != -1 else None
-    loader = torch_data.DataLoader if image_weights else InfiniteDataLoader
+    # loader = torch_data.DataLoader if image_weights else InfiniteDataLoader
+    loader = torch_data.DataLoader
     # Use torch.utils.data.DataLoader() if dataset.properties will update during training else InfiniteDataLoader()
     dataloader = loader(dataset,
                         batch_size=batch_size,
@@ -172,6 +173,7 @@ class LoadImagesAndLabels(Dataset):  # for training/testing
     def __init__(self, path, img_size=640, batch_size=16, augment=False, hyp=None, rect=False, image_weights=False,
                  single_cls=False, stride=32, pad=0.0, prefix=''):
         self.img_size = img_size
+        self.batch_size = batch_size
         self.augment = augment
         self.hyp = hyp
         self.image_weights = image_weights
@@ -231,7 +233,7 @@ class LoadImagesAndLabels(Dataset):  # for training/testing
         [cache.pop(k) for k in ('hash', 'version', 'msgs')]  # 移除元素
         self._cache_items = list(cache.items())
         # TODO 下面这行可能不需要在 init 时运行，但也不一定哈哈哈
-        self.img_files, self.shapes, self.det_labels, self.seg_labels = self.reshuffle()
+        self.img_files, self.shapes, self.det_labels, self.seg_labels = self.shuffle()
         self.de_label_files, self.se_label_files = img2label_paths(cache.keys())  # update
         if single_cls:
             for d, s in zip(self.det_labels, self.seg_labels):
@@ -240,9 +242,7 @@ class LoadImagesAndLabels(Dataset):  # for training/testing
 
         # TODO 将图片缓存到内存以加速训练（注意：大数据集可能超过RAM）
     
-    def reshuffle(self, seed=None):
-        if seed:
-            init_seeds(seed)
+    def shuffle(self):
         random.shuffle(self._cache_items)  # TODO 此处很重要
         self.img_files = [item[0] for item in self._cache_items]  # update
         cache_values = [item[1] for item in self._cache_items]
@@ -490,7 +490,8 @@ def load_mosaic(self: LoadImagesAndLabels, index):
     det_labels4, seg_labels4 = [], []
     s = self.img_size
     yc, xc = [int(random.uniform(-x, 2 * s + x)) for x in self.mosaic_border]
-    indices = [index] + random.sample(self.indices, k=3)  # 除了当前index外，再额外随机选三个，组成四个index
+    indices = [index] + random.choices(self.indices, k=3)  # 除了当前index外，再额外随机选三个，组成四个index
+    random.shuffle(indices)
     img4 = np.full((s * 2, s * 2, 3), 114, dtype=np.uint8)
     for i, index in enumerate(indices):
         # 加载图片

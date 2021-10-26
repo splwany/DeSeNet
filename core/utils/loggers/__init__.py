@@ -69,7 +69,7 @@ class Loggers():
         if self.wandb:
             self.wandb.log({"Labels": [wandb.Image(str(x), caption=x.name) for x in paths]})
 
-    def on_train_batch_end(self, ni, model, imgs, targets, paths, plots, sync_bn):
+    def on_train_batch_end(self, ni, model, imgs, targets, seg_targets, paths, plots, sync_bn):
         # Callback runs on train batch end
         if plots:
             if ni == 0:
@@ -79,7 +79,8 @@ class Loggers():
                         self.tb.add_graph(torch.jit.trace(de_parallel(model), imgs[0:1], strict=False), [])
             if ni < 3:
                 f = self.save_dir / f'train_batch{ni}.jpg'  # filename
-                Thread(target=plot_images, args=(imgs, targets, paths, f), daemon=True).start()
+                seg_f = self.save_dir / f'train_batch{ni}_seg.png'  # segfilename
+                Thread(target=plot_images, args=(imgs, targets, seg_targets, paths, f, seg_f), daemon=True).start()
             if self.wandb and ni == 10:
                 files = sorted(self.save_dir.glob('train*.jpg'))
                 self.wandb.log({'Mosaics': [wandb.Image(str(f), caption=f.name) for f in files if f.exists()]})

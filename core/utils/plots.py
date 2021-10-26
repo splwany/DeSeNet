@@ -9,13 +9,15 @@ from copy import copy
 from pathlib import Path
 
 import cv2
+import imgviz
 import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import seaborn as sns
 import torch
-from core.utils.general import is_ascii, is_chinese, user_config_dir, xywh2xyxy, xyxy2xywh
+from core.utils.general import (is_ascii, is_chinese, user_config_dir,
+                                xywh2xyxy, xyxy2xywh)
 from core.utils.metrics import fitness
 from PIL import Image, ImageDraw, ImageFont
 
@@ -75,7 +77,8 @@ class Annotator:
                                    size=font_size or max(round(sum(self.im.size) / 2 * 0.035), 12))
         else:  # use cv2
             self.im = im
-        self.lw = line_width or max(round(sum(im.shape) / 2 * 0.003), 2)  # line width
+        shape = im.size if isinstance(im, Image.Image) else im.shape
+        self.lw = line_width or max(round(sum(shape) / 2 * 0.003), 2)  # line width
 
     def box_label(self, box, label='', color=(128, 128, 128), txt_color=(255, 255, 255)):
         # Add one xyxy box to image with label
@@ -114,6 +117,23 @@ class Annotator:
     def result(self):
         # Return annotated image as array
         return np.asarray(self.im)
+
+
+class SegAnnotator:
+    # DeSeNet SegAnnotator for train/val mosaics and jpgs ad detect/hub inference annotations
+    def __init__(self, im):
+        self.im = im
+        self.colormap = imgviz.label_colormap().flatten()
+    
+    def seg_label(self, label, xy):
+        x1, y1, x2, y2 = tuple(xy)
+        # print(f'x1:{x1}, y1:{y1}, x2:{x2}, y2:{x2}')
+        self.im[y1:y2, x1:x2] = label
+    
+    def save(self, path):
+        im = Image.fromarray(self.im, mode="P")
+        im.putpalette(self.colormap)
+        im.save(path)
 
 
 def hist2d(x, y, n=100):
@@ -208,12 +228,14 @@ def output_to_target(output):
     return np.array(targets)
 
 
-def plot_images(images, targets, paths=None, fname='images.jpg', names=None, max_size=1920, max_subplots=16):
+def plot_images(images, targets, seg_targets, paths=None, fname='images.jpg', seg_fname='seglabels.png', names=None, max_size=1920, max_subplots=16):
     # Plot image grid with labels
     if isinstance(images, torch.Tensor):
         images = images.cpu().float().numpy()
     if isinstance(targets, torch.Tensor):
         targets = targets.cpu().numpy()
+    if isinstance(seg_targets, torch.Tensor):
+        seg_targets = seg_targets.cpu().numpy()
     if np.max(images[0]) <= 1:
         images *= 255.0  # de-normalise (optional)
     bs, _, h, w = images.shape  # batch size, _, height, width
@@ -222,6 +244,7 @@ def plot_images(images, targets, paths=None, fname='images.jpg', names=None, max
 
     # Build Image
     mosaic = np.full((int(ns * h), int(ns * w), 3), 255, dtype=np.uint8)  # init
+    segmosaic = np.full((int(ns * h), int(ns * w)), 0, dtype=np.uint8)
     for i, im in enumerate(images):
         if i == max_subplots:  # if last batch has fewer images than we expect
             break
@@ -235,31 +258,34 @@ def plot_images(images, targets, paths=None, fname='images.jpg', names=None, max
         h = math.ceil(scale * h)
         w = math.ceil(scale * w)
         mosaic = cv2.resize(mosaic, tuple(int(x * ns) for x in (w, h)))
+        segmosaic = cv2.resize(segmosaic, tuple(int(x * ns) for x in (w, h)))
 
     # Annotate
     fs = int((h + w) * ns * 0.01)  # font size
     annotator = Annotator(mosaic, line_width=round(fs / 10), font_size=fs, pil=True)
+    seg_annotator = SegAnnotator(segmosaic)
     for i in range(i + 1):
         x, y = int(w * (i // ns)), int(h * (i % ns))  # block origin
         annotator.rectangle([x, y, x + w, y + h], None, (255, 255, 255), width=2)  # borders
+        seg_annotator.seg_label(cv2.resize(seg_targets[i].astype('uint8'), (w, h)), [x, y, x + w, y + h])
         if paths:
             annotator.text((x + 5, y + 5 + h), text=Path(paths[i]).name[:40], txt_color=(220, 220, 220))  # filenames
         if len(targets) > 0:
             ti = targets[targets[:, 0] == i]  # image targets
-            boxes = xywh2xyxy(ti[:, 2:6]).T
+            boxes = xywh2xyxy(ti[:, 2:6])
             classes = ti[:, 1].astype('int')
             labels = ti.shape[1] == 6  # labels if no conf column
             conf = None if labels else ti[:, 6]  # check for confidence presence (label vs pred)
 
-            if boxes.shape[1]:
+            if len(boxes):
                 if boxes.max() <= 1.01:  # if normalized with tolerance 0.01
-                    boxes[[0, 2]] *= w  # scale to pixels
-                    boxes[[1, 3]] *= h
+                    boxes[:, [0, 2]] *= w  # scale to pixels
+                    boxes[:, [1, 3]] *= h
                 elif scale < 1:  # absolute coords need scale if image scales
                     boxes *= scale
-            boxes[[0, 2]] += x
-            boxes[[1, 3]] += y
-            for j, box in enumerate(boxes.T.tolist()):
+            boxes[:, [0, 2]] += x
+            boxes[:, [1, 3]] += y
+            for j, box in enumerate(boxes.tolist()):
                 cls = classes[j]
                 color = colors(cls)
                 cls = names[cls] if names else cls
@@ -267,6 +293,7 @@ def plot_images(images, targets, paths=None, fname='images.jpg', names=None, max
                     label = f'{cls}' if labels else f'{cls} {conf[j]:.1f}'
                     annotator.box_label(box, label, color=color)
     annotator.im.save(fname)  # save
+    seg_annotator.save(seg_fname)  # save seglabel
 
 
 def plot_lr_scheduler(optimizer, scheduler, epochs=300, save_dir=''):

@@ -51,7 +51,7 @@ from core.utils.loggers import Loggers
 from core.utils.loss import ComputeLoss, SegmentationLosses
 from core.utils.metrics import fitness_det_seg
 from core.utils.mixed_datasets import create_mixed_dataloader
-from core.utils.plots import plot_labels, plot_evolve, plot_one_box, colors
+from core.utils.plots import plot_labels, plot_evolve, plot_one_box, colors, plot_images
 from core.utils.torch_utils import (EarlyStopping, ModelEMA, de_parallel,
                                     intersect_dicts, select_device,
                                     torch_distributed_zero_first)
@@ -227,7 +227,7 @@ def train(hyp, opt, device: torch.device, callbacks):
                                                     hyp=hyp, augment=True, rect=opt.rect, rank=RANK,
                                                     workers=workers, image_weights=opt.image_weights, quad=opt.quad,
                                                     prefix=colorstr('train: '))
-    assert isinstance(train_loader, InfiniteDataLoader)
+    # assert isinstance(train_loader, InfiniteDataLoader)
     mlc = int(np.concatenate(dataset.det_labels, 0)[:, 0].max())  # max label class 标签中共有多少类
     nb = len(train_loader)  # batch 总数
     assert mlc < de_nc, f'目标检测标签类别数 {mlc} 超过 {opt.data} 中的 nc={de_nc}. nc 值的范围是 0{"-" + str(de_nc - 1) if de_nc > 1 else ""}'
@@ -265,7 +265,9 @@ def train(hyp, opt, device: torch.device, callbacks):
     model.de_nc = de_nc  # attach number of det_classes to model
     model.se_nc = se_nc  # attach number of seg_classes to model
     model.hyp = hyp  # attach hyperparameters to model
-    model.class_weights = labels_to_class_weights(dataset.det_labels, de_nc).to(device) * de_nc  
+    model.class_weights = labels_to_class_weights(dataset.det_labels, de_nc).to(device) * de_nc 
+    model.de_names = de_names
+    model.se_names = se_names
     
     # 开始训练
     t0 = time.time()
@@ -293,54 +295,37 @@ def train(hyp, opt, device: torch.device, callbacks):
 
     for epoch in range(start_epoch, epochs):  # epoch -----------------------------------------------------------
         model.train()
-        # dataset.reshuffle(1 + RANK + epoch * WORLD_SIZE)  # 重新打乱以确保每轮的随机情况不同
-        
+
         # Update image weights (optional, single-GPU only)
         if opt.image_weights:
             cw = model.class_weights.cpu().numpy() * (1 - maps) ** 2 / de_nc  # class weights
             iw = labels_to_image_weights(dataset.det_labels, nc=de_nc, class_weights=cw)  # image weights
             dataset.indices = random.choices(range(dataset.n), weights=iw, k=dataset.n)  # rand weighted idx
+        if opt.rect:
+            indices = dataset.indices
+            pad = batch_size - (len(indices) % batch_size)
+            if pad > 0:
+                indices += random.choices(indices[(pad - batch_size):], k=pad)
+            indices = np.asarray(indices).reshape(-1, batch_size)
+            np.random.shuffle(indices)
+            dataset.indices = list(indices.flatten())
+        else:
+            random.shuffle(dataset.indices)
 
         mloss = torch.zeros(3, device=device)  # 目标检测 mean losses
         msegloss = torch.zeros(1, device=device)  # 混合的 mean losses, 两者计算也可知分割 loss
         if RANK != -1:
             assert isinstance(train_loader.sampler, torch_data.distributed.DistributedSampler)
-            train_loader.sampler.set_epoch(epoch)  # shuffle时，保证每个epoch顺序不同
+            train_loader.sampler.set_epoch(epoch)  # shuffle时，保证每个epoch的划分不同
         pbar = enumerate(train_loader)
         LOGGER.info(('\n' + '%10s' * 8) % ('Epoch', 'gpu_men', 'box', 'obj', 'cls', 'seg', 'labels', 'img_size'))
         if RANK in [-1, 0]:
             pbar = tqdm(pbar, total=nb)  # 进度条
         optimizer.zero_grad()
         for i, (imgs, det_labels, seg_labels, paths, _) in pbar:  # imgs.shape == torch.Size([batch, 3, 640, 640])
+            path_prefix = f'{epoch}_{i}'
             # TODO 注释代码为测试数据集加载效果的，这些最后需要删掉
-            # out_imgs = imgs.permute(0, 2, 3, 1).numpy()
-            # det_dict = {}
-            # for det in det_labels:
-            #     key = det[0].item()
-            #     if key in det_dict:
-            #         det_dict[key].append(det.numpy())
-            #     else:
-            #         det_dict[key] = [det.numpy()]
-            # out_dets = det_dict.values()
-            # out_segs = seg_labels.numpy()
-            # for j, (out_img, out_det, out_seg, path) in enumerate(zip(out_imgs, out_dets, out_segs, paths)):
-            #     h, w = out_img.shape[:2]
-            #     out_img = np.ascontiguousarray(out_img)
-            #     out_det = np.stack(out_det)
-            #     out_det[:, 2:] = xywhn2xyxy(out_det[:, 2:], w, h)
-            #     for det in out_det:
-            #         c = int(det[1])
-            #         label = de_names[c]
-            #         plot_one_box(det[2:], out_img, label=label, color=colors(c, True), line_thickness=1)
-            #     # path_preffix = Path(path).stem
-            #     path_preffix = f'{epoch}_{i}_{j}_'
-            #     cv2.imwrite(f'runs/tmp{epoch}/{path_preffix}.jpg', cv2.cvtColor(out_img, cv2.COLOR_BGR2RGB))
-            #     file_name = f'runs/tmp{epoch}/{path_preffix}_label.png'
-            #     if (out_seg > 0).any() and out_seg.min() >= 0 and out_seg.max() < 255:
-            #         lbl_pil = Image.fromarray(out_seg.astype(np.uint8), mode="P")
-            #         colormap = imgviz.label_colormap()
-            #         lbl_pil.putpalette(colormap.flatten())
-            #         lbl_pil.save(file_name)
+            plot_images(imgs, det_labels, seg_labels, paths, f'runs/tmp{epoch}/{path_prefix}.jpg', f'runs/tmp{epoch}/{path_prefix}_label.png', de_names)
 
             ni = i + nb * epoch  # number integrated batches (since train start)
             assert isinstance(imgs, torch.Tensor)
@@ -400,7 +385,7 @@ def train(hyp, opt, device: torch.device, callbacks):
                 mem = f'{torch.cuda.memory_reserved() / 1E9 if torch.cuda.is_available() else 0:.3g}G'  # (GB)
                 pbar.set_description(('%10s' * 2 + '%10.4g' * 6) % (
                     f'{epoch}/{epochs - 1}', mem, *mloss, msegloss, det_labels.shape[0], imgs.shape[-1]))
-                callbacks.run('on_train_batch_end', ni, model, imgs, det_labels, paths, plots, opt.sync_bn)
+                callbacks.run('on_train_batch_end', ni, model, imgs, det_labels, seg_labels, paths, plots, opt.sync_bn)
             # end batch ------------------------------------------------------------------------------------------------
 
         # Scheduler
