@@ -73,7 +73,7 @@ class Annotator:
         if self.pil:  # use PIL
             self.im = im if isinstance(im, Image.Image) else Image.fromarray(im)
             self.draw = ImageDraw.Draw(self.im)
-            self.font = check_font(font='Arial.Unicode.tff' if is_chinese(example) else font,
+            self.font = check_font(font='wqy-microhei.ttc' if is_chinese(example) else font,
                                    size=font_size or max(round(sum(self.im.size) / 2 * 0.035), 12))
         else:  # use cv2
             self.im = im
@@ -91,7 +91,8 @@ class Annotator:
                                      box[1] - h if outside else box[1],
                                      box[0] + w + 1,
                                      box[1] + 1 if outside else box[1] + h + 1), fill=color)
-                self.draw.text((box[0], box[1]), label, fill=txt_color, font=self.font, anchor='ls')  # for PIL>8.0
+                self.draw.text((box[0],
+                                box[1] if outside else box[1] + h), label, fill=txt_color, font=self.font, anchor='ls')  # for PIL>8.0
                 # self.draw.text((box[0], box[1] - h if outside else box[1]), label, fill=txt_color, font=self.font)
         else:  # cv2
             p1, p2 = (int(box[0]), int(box[1])), (int(box[2]), int(box[3]))
@@ -125,12 +126,17 @@ class SegAnnotator:
         self.im = im
         self.colormap = imgviz.label_colormap().flatten()
     
-    def seg_label(self, label, xy):
-        x1, y1, x2, y2 = tuple(xy)
-        # print(f'x1:{x1}, y1:{y1}, x2:{x2}, y2:{x2}')
-        self.im[y1:y2, x1:x2] = label
+    def seg_label(self, label, xy=None):
+        if xy is not None:
+            x1, y1, x2, y2 = tuple(xy)
+            # print(f'x1:{x1}, y1:{y1}, x2:{x2}, y2:{x2}')
+            self.im[y1:y2, x1:x2] = label
+        else:
+            self.im[:, :] = label
     
-    def save(self, path):
+    def save(self, path, ignore=True):
+        if (not (self.im > 0).any()) and ignore:
+            return
         im = Image.fromarray(self.im, mode="P")
         im.putpalette(self.colormap)
         im.save(path)
@@ -228,7 +234,15 @@ def output_to_target(output):
     return np.array(targets)
 
 
-def plot_images(images, targets, seg_targets, paths=None, fname='images.jpg', seg_fname='seglabels.png', names=None, max_size=1920, max_subplots=16):
+def plot_images(images, targets, seg_targets=None, paths=None, fname='images.jpg', seg_fname='seglabels.png', names=None, max_size=1920, max_subplots=16):
+    # Make dir
+    fname = Path(fname)
+    seg_fname = Path(seg_fname)
+    if not fname.parent.is_dir():
+        fname.parent.mkdir(parents=True, exist_ok=True)
+    if not seg_fname.parent.is_dir():
+        seg_fname.parent.mkdir(parents=True, exist_ok=True)
+    
     # Plot image grid with labels
     if isinstance(images, torch.Tensor):
         images = images.cpu().float().numpy()
@@ -246,11 +260,11 @@ def plot_images(images, targets, seg_targets, paths=None, fname='images.jpg', se
     mosaic = np.full((int(ns * h), int(ns * w), 3), 255, dtype=np.uint8)  # init
     segmosaic = np.full((int(ns * h), int(ns * w)), 0, dtype=np.uint8)
     for i, im in enumerate(images):
-        if i == max_subplots:  # if last batch has fewer images than we expect
-            break
         x, y = int(w * (i // ns)), int(h * (i % ns))  # block origin
         im = im.transpose(1, 2, 0)
         mosaic[y:y + h, x:x + w, :] = im
+        if i == max_subplots - 1:  # if last batch has fewer images than we expect
+            break
 
     # Resize (optional)
     scale = max_size / ns / max(h, w)
@@ -263,11 +277,15 @@ def plot_images(images, targets, seg_targets, paths=None, fname='images.jpg', se
     # Annotate
     fs = int((h + w) * ns * 0.01)  # font size
     annotator = Annotator(mosaic, line_width=round(fs / 10), font_size=fs, pil=True)
-    seg_annotator = SegAnnotator(segmosaic)
+    if seg_targets is not None:
+        seg_annotator = SegAnnotator(segmosaic)
     for i in range(i + 1):
         x, y = int(w * (i // ns)), int(h * (i % ns))  # block origin
         annotator.rectangle([x, y, x + w, y + h], None, (255, 255, 255), width=2)  # borders
-        seg_annotator.seg_label(cv2.resize(seg_targets[i].astype('uint8'), (w, h)), [x, y, x + w, y + h])
+        if seg_targets is not None:
+            seg_target = seg_targets[i].astype('uint8')
+            seg_target = cv2.resize(seg_target, (w, h))
+            seg_annotator.seg_label(seg_target, [x, y, x + w, y + h])
         if paths:
             annotator.text((x + 5, y + 5 + h), text=Path(paths[i]).name[:40], txt_color=(220, 220, 220))  # filenames
         if len(targets) > 0:
@@ -292,8 +310,9 @@ def plot_images(images, targets, seg_targets, paths=None, fname='images.jpg', se
                 if labels or conf[j] > 0.25:  # 0.25 conf thresh
                     label = f'{cls}' if labels else f'{cls} {conf[j]:.1f}'
                     annotator.box_label(box, label, color=color)
-    annotator.im.save(fname)  # save
-    seg_annotator.save(seg_fname)  # save seglabel
+    annotator.im.save(str(fname))  # save
+    if seg_targets is not None:
+        seg_annotator.save(str(seg_fname))  # save seglabel
 
 
 def plot_lr_scheduler(optimizer, scheduler, epochs=300, save_dir=''):

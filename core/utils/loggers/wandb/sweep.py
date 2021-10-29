@@ -1,9 +1,6 @@
 import sys
 from pathlib import Path
 
-from cv2 import calcBackProject
-from core.utils import callbacks
-
 import wandb
 
 FILE = Path(__file__).resolve()

@@ -55,7 +55,7 @@ from core.utils.plots import plot_labels, plot_evolve, plot_one_box, colors, plo
 from core.utils.torch_utils import (EarlyStopping, ModelEMA, de_parallel,
                                     intersect_dicts, select_device,
                                     torch_distributed_zero_first)
-from core.utils.wandb_logging.wandb_utils import check_wandb_resume
+from core.utils.loggers.wandb.wandb_utils import check_wandb_resume
 
 import scripts.val as val  # for end-of-epoch mAP
 
@@ -285,7 +285,7 @@ def train(hyp, opt, device: torch.device, callbacks):
     # Base, PSP 和 Lab 用这个，无 aux
     compute_seg_loss = SegmentationLosses()
 
-    detgain, seggain = 0.6, 0.35  # 目标检测、语义分隔 比例
+    detgain, seggain = 0.15, 0.85  # 目标检测、语义分隔 比例
     # CE、1/8单输入、batchsize13用0.65,0.35左右,注意64向下取整的梯度积累，比13*4=52大(12*5=64)通常应该降低分割损失比例或调小学习率
 
     LOGGER.info(f'Image sizes {imgsz} train, {imgsz} val\n'
@@ -303,10 +303,10 @@ def train(hyp, opt, device: torch.device, callbacks):
             dataset.indices = random.choices(range(dataset.n), weights=iw, k=dataset.n)  # rand weighted idx
         if opt.rect:
             indices = dataset.indices
-            pad = batch_size - (len(indices) % batch_size)
+            pad = (batch_size // WORLD_SIZE) - (len(indices) % (batch_size // WORLD_SIZE))
             if pad > 0:
-                indices += random.choices(indices[(pad - batch_size):], k=pad)
-            indices = np.asarray(indices).reshape(-1, batch_size)
+                indices += random.choices(indices[(pad - (batch_size // WORLD_SIZE)):], k=pad)
+            indices = np.asarray(indices).reshape(-1, (batch_size // WORLD_SIZE))
             np.random.shuffle(indices)
             dataset.indices = list(indices.flatten())
         else:
@@ -323,9 +323,9 @@ def train(hyp, opt, device: torch.device, callbacks):
             pbar = tqdm(pbar, total=nb)  # 进度条
         optimizer.zero_grad()
         for i, (imgs, det_labels, seg_labels, paths, _) in pbar:  # imgs.shape == torch.Size([batch, 3, 640, 640])
-            path_prefix = f'{epoch}_{i}'
-            # TODO 注释代码为测试数据集加载效果的，这些最后需要删掉
-            plot_images(imgs, det_labels, seg_labels, paths, f'runs/tmp{epoch}/{path_prefix}.jpg', f'runs/tmp{epoch}/{path_prefix}_label.png', de_names)
+            # TODO 以下两行代码为测试数据集加载效果的，这些最后需要删掉
+            # path_prefix = f'{epoch}_{i}'
+            # plot_images(imgs, det_labels, seg_labels, paths, f'runs/tmp{epoch}/{path_prefix}.jpg', f'runs/tmp{epoch}/{path_prefix}_label.png', de_names)
 
             ni = i + nb * epoch  # number integrated batches (since train start)
             assert isinstance(imgs, torch.Tensor)

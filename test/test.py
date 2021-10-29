@@ -1,7 +1,8 @@
 # import yaml
 # import argparse
+import argparse
 from hashlib import pbkdf2_hmac
-from logging import setLoggerClass
+from logging import addLevelName, setLoggerClass
 from pathlib import Path
 
 # from torch.utils import data
@@ -28,3 +29,4 @@ from itertools import repeat
 from torch.nn import BCELoss, BCEWithLogitsLoss, Sigmoid
 
 
+print([100] * 1)
