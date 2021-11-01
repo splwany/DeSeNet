@@ -2,19 +2,19 @@ import datetime
 import logging
 import math
 import os
-import platform
 import subprocess
 import time
+from collections import OrderedDict
 from contextlib import contextmanager
 from copy import deepcopy
 from pathlib import Path
-from collections import OrderedDict
 
 import torch
 import torch.distributed as distributed
 import torch.nn as nn
 import torch.nn.functional as F
 import torchvision
+from core.utils.general import emojis
 
 try:
     import thop  # 计算 FLOPS
@@ -74,7 +74,7 @@ def select_device(device='', batch_size=None) -> torch.device:
     else:
         s += 'CPU\n'
 
-    LOGGER.info(s.encode().decode('ascii', 'ignore') if platform.system() == 'Windows' else s)  # emoji-safe
+    LOGGER.info(emojis(s))  # emoji-safe
     return torch.device('cuda:0' if cuda else 'cpu')
 
 

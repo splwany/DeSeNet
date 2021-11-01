@@ -27,30 +27,30 @@ ROOT = ROOT.relative_to(Path.cwd())  # relative
 import torch.nn.functional as F
 from core.models.experimental import attempt_load
 from core.utils.callbacks import Callbacks
-from core.utils.datasets import create_dataloader
+from core.utils.mixed_datasets import create_mixed_dataloader
 from core.utils.general import (box_iou, check_dataset, check_img_size,
                                 check_requirements, check_suffix, check_yaml,
                                 coco80_to_coco91_class, colorstr,
                                 increment_path, non_max_suppression,
                                 print_args, scale_coords, set_logging,
                                 xywh2xyxy, xyxy2xywh)
-from core.utils.metrics import (ConfusionMatrix, ap_per_class,  # 后两个新增分割
-                                batch_intersection_union, batch_pix_accuracy)
-from core.utils.plots import output_to_target, plot_images, plot_val_study
+from core.utils.metrics import (ConfusionMatrix, ap_per_class,
+                                batch_intersection_union, batch_pix_accuracy)  # 后两个新增分割
+from core.utils.plots import output_to_target, segoutput_upsample_to_size, plot_images, plot_val_study
 from core.utils.torch_utils import select_device, time_sync
 
 
-def seg_validation(model, n_segcls, valloader, device, half_precision=True):
+def seg_validation(model, n_segcls, valloader, half_precision=True):
     # Fast test during the training
-    def eval_batch(model, image, target, half):
-        outputs = model(image)
-        # outputs = gather(outputs, 0, dim=0)
-        pred = outputs[1]  # 1是分割
+    def eval_batch(model, image, target):
+        pred = model(image)[1]  # 语义分割的输出
         target = target.to(device, non_blocking=True)
         pred = F.interpolate(pred, (target.shape[1], target.shape[2]), mode='bilinear', align_corners=True)
-        correct, labeled = batch_pix_accuracy(pred.data, target)
-        inter, union = batch_intersection_union(pred.data, target, n_segcls)
+        correct, labeled = batch_pix_accuracy(pred.detach(), target)
+        inter, union = batch_intersection_union(pred.detach(), target, n_segcls)
         return correct, labeled, inter, union
+    
+    device = next(model.parameters()).device
 
     half = device.type != 'cpu' and half_precision  # half precision only supported on CUDA
     if half:
@@ -59,12 +59,11 @@ def seg_validation(model, n_segcls, valloader, device, half_precision=True):
     total_inter, total_union, total_correct, total_label = 0, 0, 0, 0
     tbar = tqdm(valloader, desc='\r')
     mIoU = None
-    for i, (image, _, target, _, _) in enumerate(tbar):
+    for i, (image, _, target, paths, _) in enumerate(tbar):
         image = image.to(device, non_blocking=True)
         image = image.half() if half else image.float()
         with torch.no_grad():
-            correct, labeled, inter, union = eval_batch(model, image, target, half)
-
+            correct, labeled, inter, union = eval_batch(model, image, target)
         total_correct += correct
         total_label += labeled
         total_inter += inter
@@ -72,9 +71,8 @@ def seg_validation(model, n_segcls, valloader, device, half_precision=True):
         pixAcc = 1.0 * total_correct / (np.spacing(1) + total_label)
         IoU = 1.0 * total_inter / (np.spacing(1) + total_union)
         mIoU = IoU.mean()
-        tbar.set_description(
-            'pixAcc: %.3f, mIoU: %.3f' % (pixAcc, mIoU))
-    # print(mIoU)
+        tbar.set_description('pixAcc: %.3f, mIoU: %.3f' % (pixAcc, mIoU))
+
     return mIoU
 
 
@@ -184,7 +182,7 @@ def run(data,
     model.eval()
     is_coco = isinstance(data.get('val'), str) and data['val'].endswith('coco/val2017.txt')  # COCO dataset
     nc = 1 if single_cls else int(data['de']['nc'])  # number of classes
-    iouv = torch.linspace(0.5, 0.95, 10).to(device)  # iou vector for mAP@0.5:0.95
+    iouv = torch.linspace(0.5, 0.95, 10).to(device)  # iou vector for mAP@0.5:0.95 生成0.5到0.95的数组，共10个值
     niou = iouv.numel()
 
     # Dataloader
@@ -192,29 +190,32 @@ def run(data,
         if device.type != 'cpu':
             model(torch.zeros(1, 3, imgsz, imgsz).to(device).type_as(next(model.parameters())))  # run once
         task = task if task in ('train', 'val', 'test') else 'val'  # path to train/val/test images
-        dataloader = create_dataloader(data[task], imgsz, batch_size, gs, single_cls, pad=0.5, rect=True,
-                                       prefix=colorstr(f'{task}: '))[0]
+        # TODO pad 设置为 0.0 或 0.5 或 1.0 可能有不同效果（rect=True 时有效）
+        dataloader = create_mixed_dataloader(data[task], imgsz, batch_size, gs, single_cls, pad=0.5, rect=True,
+                                             prefix=colorstr(f'{task}: '))[0]
 
     seen = 0
     confusion_matrix = ConfusionMatrix(nc=nc)
-    names = model.de_names if hasattr(model, 'de_names') else model.module.de_names
+    names = {k: v for k, v in enumerate(model.de_names if hasattr(model, 'de_names') else model.module.de_names)}
+    se_names = {k: v for k, v in enumerate(model.se_names if hasattr(model, 'se_names') else model.module.se_names)}
     class_map = coco80_to_coco91_class() if is_coco else list(range(1000))
     s = ('%20s' + '%11s' * 6) % ('Class', 'Images', 'Labels', 'P', 'R', 'mAP@.5', 'mAP@.5:.95')
     dt, p, r, f1, mp, mr, map50, map = [0.0, 0.0, 0.0], 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
     loss = torch.zeros(3, device=device)
     jdict, stats, ap, ap_class = [], [], [], []
-    for batch_i, (img, targets, _, paths, shapes) in enumerate(tqdm(dataloader, desc=s)):
+    for batch_i, (img, targets, seg_targets, paths, shapes) in enumerate(tqdm(dataloader, desc=s)):
         t1 = time_sync()
         img = img.to(device, non_blocking=True)
         img = img.half() if half else img.float()  # uint8 to fp16/32
         img /= 255.0  # 0 - 255 to 0.0 - 1.0
         targets = targets.to(device)
+        seg_targets = seg_targets.to(device)
         nb, _, height, width = img.shape  # batch size, channels, height, width
         t2 = time_sync()
         dt[0] += t2 - t1
 
         # Run model
-        out, train_out = model(img, augment=augment)[0]  # inference and training outputs
+        (out, train_out), seg_out = model(img, augment=augment)  # inference and training outputs
         dt[1] += time_sync() - t2
 
         # Compute loss
@@ -229,7 +230,7 @@ def run(data,
         dt[2] += time_sync() - t3
 
         # Statistics per image
-        for si, pred in enumerate(out):
+        for si, (pred, seg_pred) in enumerate(zip(out, seg_out)):
             labels = targets[targets[:, 0] == si, 1:]
             nl = len(labels)
             tcls = labels[:, 0].tolist() if nl else []  # target class
@@ -264,14 +265,17 @@ def run(data,
                 save_one_txt(predn, save_conf, shape, file=save_dir / 'labels' / (path.stem + '.txt'))
             if save_json:
                 save_one_json(predn, jdict, path, class_map)  # append to COCO-JSON dictionary
-            callbacks.run('on_val_image_end', pred, predn, path, names, img[si])
+            seg_pred = segoutput_upsample_to_size(seg_out, seg_targets.shape[1:])
+            callbacks.run('on_val_image_end', pred, predn, seg_pred, path, names, se_names, img[si])
 
         # Plot images
         if plots and batch_i < 3:
             f = save_dir / f'val_batch{batch_i}_labels.jpg'  # labels
-            Thread(target=plot_images, args=(img, targets, None, paths, f, save_dir / f'val_batch{batch_i}_seglabels.png', names), daemon=True).start()
+            seg_f = save_dir / f'val_batch{batch_i}_seglabels.png'  # seg labels
+            Thread(target=plot_images, args=(img, targets, seg_targets, paths, f, seg_f, names), daemon=True).start()
             f = save_dir / f'val_batch{batch_i}_pred.jpg'  # predictions
-            Thread(target=plot_images, args=(img, output_to_target(out), None, paths, f, save_dir / f'val_batch{batch_i}_segpred.png', names), daemon=True).start()
+            seg_f = save_dir / f'val_batch{batch_i}_segpred.png'  # seg predictions
+            Thread(target=plot_images, args=(img, output_to_target(out), segoutput_upsample_to_size(seg_out, seg_targets.shape[1:]), paths, f, seg_f, names), daemon=True).start()
 
     # Compute statistics
     stats = [np.concatenate(x, 0) for x in zip(*stats)]  # to numpy

@@ -16,6 +16,7 @@ import numpy as np
 import pandas as pd
 import seaborn as sns
 import torch
+import torch.nn.functional as F
 from core.utils.general import (is_ascii, is_chinese, user_config_dir,
                                 xywh2xyxy, xyxy2xywh)
 from core.utils.metrics import fitness
@@ -232,6 +233,10 @@ def output_to_target(output):
         for *box, conf, cls in o.cpu().numpy():
             targets.append([i, cls, *list(*xyxy2xywh(np.array(box)[None])), conf])
     return np.array(targets)
+
+
+def segoutput_upsample_to_size(output, size=(640, 640)):
+    return F.interpolate(output, size, mode='bilinear', align_corners=True)
 
 
 def plot_images(images, targets, seg_targets=None, paths=None, fname='images.jpg', seg_fname='seglabels.png', names=None, max_size=1920, max_subplots=16):

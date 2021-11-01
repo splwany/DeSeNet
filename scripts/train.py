@@ -9,8 +9,6 @@ from collections import OrderedDict
 from copy import deepcopy
 from pathlib import Path
 
-import cv2
-import imgviz
 import numpy as np
 import torch
 import torch.distributed as dist
@@ -18,7 +16,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.utils.data as torch_data
 import yaml
-from PIL import Image
 from torch.cuda import amp
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.optim import SGD, Adam, lr_scheduler
@@ -35,7 +32,6 @@ ROOT = ROOT.relative_to(Path.cwd())  # relative
 
 from core.models.experimental import attempt_load
 from core.models.yolo import Model
-from core.utils.mixed_datasets import InfiniteDataLoader
 from core.utils.autoanchor import check_anchors
 from core.utils.callbacks import Callbacks
 from core.utils.general import (check_dataset, check_file, check_git_status,
@@ -48,14 +44,15 @@ from core.utils.general import (check_dataset, check_file, check_git_status,
                                 xywhn2xyxy, xyxy2xywh)
 from core.utils.google_utils import attempt_download
 from core.utils.loggers import Loggers
+from core.utils.loggers.wandb.wandb_utils import check_wandb_resume
 from core.utils.loss import ComputeLoss, SegmentationLosses
 from core.utils.metrics import fitness_det_seg
-from core.utils.mixed_datasets import create_mixed_dataloader
-from core.utils.plots import plot_labels, plot_evolve, plot_one_box, colors, plot_images
+from core.utils.mixed_datasets import (InfiniteDataLoader,
+                                       create_mixed_dataloader)
+from core.utils.plots import colors, plot_images, plot_labels
 from core.utils.torch_utils import (EarlyStopping, ModelEMA, de_parallel,
                                     intersect_dicts, select_device,
                                     torch_distributed_zero_first)
-from core.utils.loggers.wandb.wandb_utils import check_wandb_resume
 
 import scripts.val as val  # for end-of-epoch mAP
 
@@ -235,9 +232,9 @@ def train(hyp, opt, device: torch.device, callbacks):
     # Process 0
     if RANK in [-1, 0]:
         val_loader = create_mixed_dataloader(val_path, imgsz, batch_size // WORLD_SIZE, gs, single_cls,
-                                                hyp=hyp, rect=True, rank=-1,
-                                                workers=workers, pad=0.5,
-                                                prefix=colorstr('val: '))[0]
+                                             hyp=hyp, rect=True, rank=-1,
+                                             workers=workers, pad=0.5,
+                                             prefix=colorstr('val: '))[0]
         if not resume:
             det_labels = np.concatenate(dataset.det_labels, 0)
             seg_labels = dataset.seg_labels
@@ -397,10 +394,16 @@ def train(hyp, opt, device: torch.device, callbacks):
             # mAP
             callbacks.run('on_train_epoch_end', epoch=epoch)
             ema.update_attr(model, include=['yaml', 'nc', 'hyp', 'names', 'stride', 'class_weights'])
+
             # TODO pixACC, mIoU
-            mIoU = val.seg_validation(model=ema.ema, valloader=val_loader, device=device, n_segcls=3, half_precision=True)
             final_epoch = (epoch + 1 == epochs) or stopper.possible_stop
             if not noval or final_epoch:  # 计算 mAP
+
+                mIoU = val.seg_validation(model=ema.ema,
+                                          n_segcls=3,
+                                          valloader=val_loader,
+                                          half_precision=True)
+
                 results, maps, _ = val.run(data_dict,
                                            batch_size=batch_size,
                                            imgsz=imgsz,
@@ -410,7 +413,7 @@ def train(hyp, opt, device: torch.device, callbacks):
                                            save_dir=save_dir,
                                            plots=False,
                                            callbacks=callbacks,
-                                           compute_loss=compute_loss,)
+                                           compute_loss=compute_loss)
 
             # Update best mAP
             fi = fitness_det_seg(np.array(results).reshape(1, -1), mIoU)  # weighted combination of [P, R, mAP@.5, mAP@.5-.95] 按0.1*AP.5+0.9*AP.5:.95指标衡量模型
@@ -516,9 +519,9 @@ def parse_opt(known=False):
     parser.add_argument('--save_period', type=int, default=-1, help='每 "save_period" 个 epoch 之后保存一次 model')
 
     # Weights & Biases arguments
-    parser.add_argument('--entity', default=None, help='W&B entity')
+    parser.add_argument('--entity', default='splwany', help='W&B entity')
     parser.add_argument('--upload_dataset', action='store_true', help='数据集上传到 W&B 工件表')
-    parser.add_argument('--bbox_interval', type=int, default=-1, help='为 W&B 设置 bounding-box 图片打印间隔')
+    parser.add_argument('--bbox_interval', type=int, default=10, help='为 W&B 设置 bounding-box 图片打印间隔')
     parser.add_argument('--artifact_alias', type=str, default='latest', help='要使用的数据集工件的版本')
     
     opt = parser.parse_known_args()[0] if known else parser.parse_args()

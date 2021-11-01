@@ -98,8 +98,8 @@ class Loggers():
                 f = self.save_dir / f'train_batch{ni}.jpg'  # filename
                 seg_f = self.save_dir / f'train_batch{ni}_seg.png'  # segfilename
                 Thread(target=plot_images, args=(imgs, targets, seg_targets, paths, f, seg_f, de_names), daemon=True).start()
-            if self.wandb and ni == 10:
-                files = sorted(self.save_dir.glob('train*.jpg'))
+            if self.wandb and ni == 5:
+                files = sorted(self.save_dir.glob('train*[jpg,png]'))
                 self.wandb.log({'Mosaics': [wandb.Image(str(f), caption=f.name) for f in files if f.exists()]})
 
     def on_train_epoch_end(self, epoch):
@@ -107,10 +107,10 @@ class Loggers():
         if self.wandb:
             self.wandb.current_epoch = epoch + 1
 
-    def on_val_image_end(self, pred, predn, path, names, im):
+    def on_val_image_end(self, pred, predn, seg_pred, path, de_names, se_names, im):
         # Callback runs on val image end
         if self.wandb:
-            self.wandb.val_one_image(pred, predn, path, names, im)
+            self.wandb.val_one_image(pred, predn, seg_pred, path, de_names, se_names, im)
 
     def on_val_end(self):
         # Callback runs on val end

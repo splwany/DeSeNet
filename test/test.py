@@ -29,4 +29,6 @@ from itertools import repeat
 from torch.nn import BCELoss, BCEWithLogitsLoss, Sigmoid
 
 
-print([100] * 1)
+save_dir = Path('runs/train/first/')
+files = sorted(save_dir.glob('train*[jpg,png]'))
+print([str(f) for f in files if f.exists()])

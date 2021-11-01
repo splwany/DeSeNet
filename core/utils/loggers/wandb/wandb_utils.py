@@ -443,7 +443,7 @@ class WandbLogger():
                                    total_conf / max(1, len(box_data))
                                    )
 
-    def val_one_image(self, pred, predn, path, names, im):
+    def val_one_image(self, pred, predn, seg_pred, path, de_names, se_names, im):
         """
         Log validation data for one image. updates the result Table if validation dataset is uploaded and log bbox media panel
 
@@ -453,17 +453,19 @@ class WandbLogger():
         path (str): local path of the current evaluation image 
         """
         if self.val_table and self.result_table:  # Log Table if Val dataset is uploaded as artifact
-            self.log_training_progress(predn, path, names)
+            self.log_training_progress(predn, path, de_names)
 
         if len(self.bbox_media_panel_images) < self.max_imgs_to_log and self.current_epoch > 0:
             if self.current_epoch % self.bbox_interval == 0:
                 box_data = [{"position": {"minX": xyxy[0], "minY": xyxy[1], "maxX": xyxy[2], "maxY": xyxy[3]},
                              "class_id": int(cls),
-                             "box_caption": "%s %.3f" % (names[cls], conf),
+                             "box_caption": "%s %.3f" % (de_names[cls], conf),
                              "scores": {"class_score": conf},
                              "domain": "pixel"} for *xyxy, conf, cls in pred.tolist()]
-                boxes = {"predictions": {"box_data": box_data, "class_labels": names}}  # inference-space
-                self.bbox_media_panel_images.append(wandb.Image(im, boxes=boxes, caption=path.name))
+                boxes = {"predictions": {"box_data": box_data, "class_labels": de_names}}  # inference-space
+                mask_data = seg_pred.cpu().numpy()
+                masks = {"predictions": {"mask_data": mask_data, "class_labels": se_names}}
+                self.bbox_media_panel_images.append(wandb.Image(im, boxes=boxes, masks=masks, caption=path.name))
 
     def log(self, log_dict):
         """

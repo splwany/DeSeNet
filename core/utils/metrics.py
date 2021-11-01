@@ -359,7 +359,7 @@ def batch_pix_accuracy(output, target):
     target = target.cpu().numpy().astype('int64') + 1
 
     pixel_labeled = np.sum(target > 0)
-    pixel_correct = np.sum((predict == target)*(target > 0))
+    pixel_correct = np.sum((predict == target) * (target > 0))
     assert pixel_correct <= pixel_labeled, \
         "Correct area should be smaller than Labeled"
     return pixel_correct, pixel_labeled
@@ -386,6 +386,5 @@ def batch_intersection_union(output, target, nclass):
     area_pred, _ = np.histogram(predict, bins=nbins, range=(mini, maxi))
     area_lab, _ = np.histogram(target, bins=nbins, range=(mini, maxi))
     area_union = area_pred + area_lab - area_inter
-    assert (area_inter <= area_union).all(), \
-        "Intersection area should be smaller than Union area"
+    assert (area_inter <= area_union).all(), "Intersection area should be smaller than Union area"
     return area_inter, area_union

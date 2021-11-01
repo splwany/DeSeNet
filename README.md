@@ -144,3 +144,31 @@
 内部有一个`channel_attention`层，包含一个平均池化、一个1 * 1瓶颈，瓶颈结构的两个卷积一个带普通激活层一个带`Sigmoid`激活层；
 
 输入`x`先通过`convblk`得到一个`feature`，这个`feature`再通过`channel_attention`得到一个`attention`，将`feature`和`attention`矩阵点乘，得到加了注意力的`feature_attention`，最后将`feature_attention`和`feature`矩阵相加，返回结果。
+
+## 训练时的钩子函数 callbacks
+
+在 `train.py` 的 `main` 方法参数中，默认获得一个 `Callbacks` 类的实例 `callbacks`，在 `train` 方法中将 `Loggers` 中的钩子函数全部注册到 `callbacks` 中。
+
+### 1. on_pretrain_routine_start (预训练开始前)
+
+暂无内容
+
+### 2. on_pretrain_routine_end (预训练结束后)
+
+将 `save_dir` 中名字为 `*labels*.jpg` 的图片显示到 wandb 中，标题为Labels，说明文字为文件名。
+
+### 3. on_train_batch_end (训练中每一批结束后)
+
+如果是前3批，则会在 `save_dir` 中保存 'train_batch0.jpg'、'train_batch0_seg.png'、'train_batch1.jpg'、'train_batch1_seg.png'、'train_batch2.jpg'、'train_batch2_seg.png'。
+
+当第5批结束后，将这些以 `train` 开头的图片文件显示到 wandb 中，标题为Mosaics，说明文字为文件名。
+
+### 4. on_train_epoch_end (训练中每一代结束后)
+
+将 wandb 中的 `current_epoch` 设为下一轮 `epoch` 的值。
+
+### 5. on_val_image_end (验证图片后)
+
+使用 `WandbLogger` 中的 `val_one_image`，在 wandb 中显示加了目标框、类别、分数的图片
+
+### 6. on_fit_epoch_end (判断模型性能后)
