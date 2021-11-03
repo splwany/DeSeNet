@@ -12,7 +12,6 @@ import os
 import sys
 from pathlib import Path
 from threading import Thread
-from cv2 import detail_ImageFeatures
 
 import numpy as np
 import torch
@@ -36,7 +35,7 @@ from core.utils.general import (box_iou, check_dataset, check_img_size,
                                 xywh2xyxy, xyxy2xywh)
 from core.utils.metrics import (ConfusionMatrix, ap_per_class,
                                 batch_intersection_union, batch_pix_accuracy)  # 后两个新增分割
-from core.utils.plots import output_to_target, segoutput_upsample_to_size, plot_images, plot_val_study
+from core.utils.plots import output_to_target, segoutput_to_target, plot_images, plot_val_study
 from core.utils.torch_utils import select_device, time_sync
 
 
@@ -45,7 +44,7 @@ def seg_validation(model, n_segcls, valloader, half_precision=True):
     def eval_batch(model, image, target):
         pred = model(image)[1]  # 语义分割的输出
         target = target.to(device, non_blocking=True)
-        pred = F.interpolate(pred, (target.shape[1], target.shape[2]), mode='bilinear', align_corners=True)
+        pred = F.interpolate(pred, (target.shape[1], target.shape[2]), mode='bilinear', align_corners=False)  # TODO 语义分割建议align_corners=True,但坐标会有差异,不好算
         correct, labeled = batch_pix_accuracy(pred.detach(), target)
         inter, union = batch_intersection_union(pred.detach(), target, n_segcls)
         return correct, labeled, inter, union
@@ -182,6 +181,7 @@ def run(data,
     model.eval()
     is_coco = isinstance(data.get('val'), str) and data['val'].endswith('coco/val2017.txt')  # COCO dataset
     nc = 1 if single_cls else int(data['de']['nc'])  # number of classes
+    se_nc = 1 if single_cls else int(data['se']['nc'])  # number of seg classes
     iouv = torch.linspace(0.5, 0.95, 10).to(device)  # iou vector for mAP@0.5:0.95 生成0.5到0.95的数组，共10个值
     niou = iouv.numel()
 
@@ -230,6 +230,7 @@ def run(data,
         dt[2] += time_sync() - t3
 
         # Statistics per image
+        seg_out = segoutput_to_target(seg_out, seg_targets[0].shape)
         for si, (pred, seg_pred) in enumerate(zip(out, seg_out)):
             labels = targets[targets[:, 0] == si, 1:]
             nl = len(labels)
@@ -265,17 +266,16 @@ def run(data,
                 save_one_txt(predn, save_conf, shape, file=save_dir / 'labels' / (path.stem + '.txt'))
             if save_json:
                 save_one_json(predn, jdict, path, class_map)  # append to COCO-JSON dictionary
-            seg_pred = segoutput_upsample_to_size(seg_out, seg_targets.shape[1:])
             callbacks.run('on_val_image_end', pred, predn, seg_pred, path, names, se_names, img[si])
 
         # Plot images
         if plots and batch_i < 3:
             f = save_dir / f'val_batch{batch_i}_labels.jpg'  # labels
-            seg_f = save_dir / f'val_batch{batch_i}_seglabels.png'  # seg labels
-            Thread(target=plot_images, args=(img, targets, seg_targets, paths, f, seg_f, names), daemon=True).start()
+            seg_f = save_dir / f'val_batch{batch_i}_seglabels.jpg'  # seg labels
+            Thread(target=plot_images, args=(img, targets, seg_targets, paths, f, seg_f, names, se_names), daemon=True).start()
             f = save_dir / f'val_batch{batch_i}_pred.jpg'  # predictions
-            seg_f = save_dir / f'val_batch{batch_i}_segpred.png'  # seg predictions
-            Thread(target=plot_images, args=(img, output_to_target(out), segoutput_upsample_to_size(seg_out, seg_targets.shape[1:]), paths, f, seg_f, names), daemon=True).start()
+            seg_f = save_dir / f'val_batch{batch_i}_segpred.jpg'  # seg predictions
+            Thread(target=plot_images, args=(img, output_to_target(out), seg_out, paths, f, seg_f, names, se_names), daemon=True).start()
 
     # Compute statistics
     stats = [np.concatenate(x, 0) for x in zip(*stats)]  # to numpy

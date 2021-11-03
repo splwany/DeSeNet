@@ -322,7 +322,7 @@ def train(hyp, opt, device: torch.device, callbacks):
         for i, (imgs, det_labels, seg_labels, paths, _) in pbar:  # imgs.shape == torch.Size([batch, 3, 640, 640])
             # TODO 以下两行代码为测试数据集加载效果的，这些最后需要删掉
             # path_prefix = f'{epoch}_{i}'
-            # plot_images(imgs, det_labels, seg_labels, paths, f'runs/tmp{epoch}/{path_prefix}.jpg', f'runs/tmp{epoch}/{path_prefix}_label.png', de_names)
+            # plot_images(imgs, det_labels, seg_labels, paths, f'runs/tmp{epoch}/{path_prefix}.jpg', f'runs/tmp{epoch}/{path_prefix}_label.jpg', de_names, se_names)
 
             ni = i + nb * epoch  # number integrated batches (since train start)
             assert isinstance(imgs, torch.Tensor)
@@ -355,7 +355,7 @@ def train(hyp, opt, device: torch.device, callbacks):
                 seg_loss = compute_seg_loss(seg_pred, seg_labels.to(device))
                 if RANK != -1:
                     det_loss *= WORLD_SIZE  # gradient averaged between devices in DDP mode
-                    seg_loss *= WORLD_SIZE ** 2  # TODO 是否是乘 batch_size
+                    seg_loss *= WORLD_SIZE  # TODO 是否是乘 batch_size
                 if opt.quad:
                     det_loss *= 4.
                     seg_loss *= 4.
@@ -521,7 +521,7 @@ def parse_opt(known=False):
     # Weights & Biases arguments
     parser.add_argument('--entity', default='splwany', help='W&B entity')
     parser.add_argument('--upload_dataset', action='store_true', help='数据集上传到 W&B 工件表')
-    parser.add_argument('--bbox_interval', type=int, default=10, help='为 W&B 设置 bounding-box 图片打印间隔')
+    parser.add_argument('--bbox_interval', type=int, default=1, help='为 W&B 设置 bounding-box 图片打印间隔')
     parser.add_argument('--artifact_alias', type=str, default='latest', help='要使用的数据集工件的版本')
     
     opt = parser.parse_known_args()[0] if known else parser.parse_args()

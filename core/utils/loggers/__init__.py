@@ -25,10 +25,10 @@ try:
     import wandb
 
     assert hasattr(wandb, '__version__')  # verify package import not local dir
-    if pkg.parse_version(wandb.__version__) >= pkg.parse_version('0.12.2') and RANK in [-1, 0]:
-        wandb_login_success = wandb.login(timeout=30)
-        if not wandb_login_success:
-            wandb = None
+    # if pkg.parse_version(wandb.__version__) >= pkg.parse_version('0.12.2') and RANK in [-1, 0]:
+    #     wandb_login_success = wandb.login(timeout=30)
+    #     if not wandb_login_success:
+    #         wandb = None
 except (ImportError, AssertionError):
     wandb = None
 
@@ -87,6 +87,7 @@ class Loggers():
         # Callback runs on train batch end
         if plots:
             de_names = model.module.de_names if hasattr(model, 'module') else model.de_names
+            se_names = model.module.se_names if hasattr(model, 'module') else model.se_names
             if ni == 0:
                 if not sync_bn:  # tb.add_graph() --sync known issue https://github.com/ultralytics/yolov5/issues/3754
                     with warnings.catch_warnings():
@@ -97,7 +98,7 @@ class Loggers():
             if ni < 3:
                 f = self.save_dir / f'train_batch{ni}.jpg'  # filename
                 seg_f = self.save_dir / f'train_batch{ni}_seg.png'  # segfilename
-                Thread(target=plot_images, args=(imgs, targets, seg_targets, paths, f, seg_f, de_names), daemon=True).start()
+                Thread(target=plot_images, args=(imgs, targets, seg_targets, paths, f, seg_f, de_names, se_names), daemon=True).start()
             if self.wandb and ni == 5:
                 files = sorted(self.save_dir.glob('train*[jpg,png]'))
                 self.wandb.log({'Mosaics': [wandb.Image(str(f), caption=f.name) for f in files if f.exists()]})

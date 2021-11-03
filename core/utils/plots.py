@@ -5,6 +5,7 @@ Plotting utils
 
 import math
 import os
+import platform
 from copy import copy
 from pathlib import Path
 
@@ -74,8 +75,9 @@ class Annotator:
         if self.pil:  # use PIL
             self.im = im if isinstance(im, Image.Image) else Image.fromarray(im)
             self.draw = ImageDraw.Draw(self.im)
-            self.font = check_font(font='wqy-microhei.ttc' if is_chinese(example) else font,
-                                   size=font_size or max(round(sum(self.im.size) / 2 * 0.035), 12))
+            if is_chinese(example):
+                font = 'msyhl.ttc' if platform.system() == 'Windows' else 'wqy-microhei.ttc'
+            self.font = check_font(font, size=font_size or max(round(sum(self.im.size) / 2 * 0.035), 12))
         else:  # use cv2
             self.im = im
         shape = im.size if isinstance(im, Image.Image) else im.shape
@@ -128,6 +130,9 @@ class SegAnnotator:
         self.colormap = imgviz.label_colormap().flatten()
     
     def seg_label(self, label, xy=None):
+        if (len(label.shape) == 3):
+            label = segoutput_to_target(label[None])[0]
+        assert len(label.shape) == 2, 'label的shape必须为(h, w)'
         if xy is not None:
             x1, y1, x2, y2 = tuple(xy)
             # print(f'x1:{x1}, y1:{y1}, x2:{x2}, y2:{x2}')
@@ -140,6 +145,7 @@ class SegAnnotator:
             return
         im = Image.fromarray(self.im, mode="P")
         im.putpalette(self.colormap)
+        im = im.convert('RGB')
         im.save(path)
 
 
@@ -235,11 +241,17 @@ def output_to_target(output):
     return np.array(targets)
 
 
-def segoutput_upsample_to_size(output, size=(640, 640)):
-    return F.interpolate(output, size, mode='bilinear', align_corners=True)
+def segoutput_to_target(output, size=None):
+    """ 将seg的结果中不同通道合并到一起，值为对应类别
+    output: shape(batch_size, seg_cls_num, h, w)
+    return: shape(batch_size, size[0], size[1])
+    """
+    size = output[0][0].shape if size is None else size
+    output = output.argmax(dim=1, keepdim=True).type(torch.float)
+    return  F.interpolate(output, size, mode='nearest').squeeze(dim=1)
 
 
-def plot_images(images, targets, seg_targets=None, paths=None, fname='images.jpg', seg_fname='seglabels.png', names=None, max_size=1920, max_subplots=16):
+def plot_images(images, targets, seg_targets=None, paths=None, fname='images.jpg', seg_fname='seglabels.jpg', names=None, se_names=[], max_size=1920, max_subplots=16):
     # Make dir
     fname = Path(fname)
     seg_fname = Path(seg_fname)

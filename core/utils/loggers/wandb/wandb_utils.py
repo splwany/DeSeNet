@@ -9,6 +9,7 @@ from pathlib import Path
 import pkg_resources as pkg
 import yaml
 from tqdm import tqdm
+import torch
 
 FILE = Path(__file__).resolve()
 ROOT = FILE.parents[4]  # YOLOv5 root directory
@@ -458,12 +459,12 @@ class WandbLogger():
         if len(self.bbox_media_panel_images) < self.max_imgs_to_log and self.current_epoch > 0:
             if self.current_epoch % self.bbox_interval == 0:
                 box_data = [{"position": {"minX": xyxy[0], "minY": xyxy[1], "maxX": xyxy[2], "maxY": xyxy[3]},
-                             "class_id": int(cls),
-                             "box_caption": "%s %.3f" % (de_names[cls], conf),
-                             "scores": {"class_score": conf},
-                             "domain": "pixel"} for *xyxy, conf, cls in pred.tolist()]
+                                "class_id": int(cls),
+                                "box_caption": "%s %.3f" % (de_names[cls], conf),
+                                "scores": {"class_score": conf},
+                                "domain": "pixel"} for *xyxy, conf, cls in pred.tolist()]
                 boxes = {"predictions": {"box_data": box_data, "class_labels": de_names}}  # inference-space
-                mask_data = seg_pred.cpu().numpy()
+                mask_data = seg_pred.type(torch.uint8).cpu().numpy()
                 masks = {"predictions": {"mask_data": mask_data, "class_labels": se_names}}
                 self.bbox_media_panel_images.append(wandb.Image(im, boxes=boxes, masks=masks, caption=path.name))
 

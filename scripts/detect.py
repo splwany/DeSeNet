@@ -29,7 +29,7 @@ from core.utils.general import (apply_classifier, check_img_size, check_imshow,
                                 increment_path, non_max_suppression,
                                 print_args, save_one_box, scale_coords,
                                 set_logging, strip_optimizer, xyxy2xywh)
-from core.utils.plots import Annotator, SegAnnotator, colors
+from core.utils.plots import Annotator, SegAnnotator, colors, segoutput_to_target
 from core.utils.torch_utils import load_classifier, select_device, time_sync
 
 
@@ -84,8 +84,10 @@ def run(weights=ROOT / 'yolov5s.pt',  # model.pt path(s)
         model = torch.jit.load(w) if 'torchscript' in w else attempt_load(weights, map_location=device)
         stride = int(model.stride.max())  # model stride
         de_names = model.module.de_names if hasattr(model, 'module') else model.de_names  # get class names
+        se_names = model.module.se_names if hasattr(model, 'module') else model.se_names  # get seg class names
         # TODO 此处为什么de_names不是中文list，而是['0', '1', '2', '3', '4', '5']
         de_names = ['路障', '杆', '树', '汽车', '电动车', '自行车']
+        se_names = ['背景', '台阶', '马路牙子']
 
         if half:
             model.half()  # to FP16
@@ -153,9 +155,7 @@ def run(weights=ROOT / 'yolov5s.pt',  # model.pt path(s)
         # Inference
         if pt:
             visualize = increment_path(save_dir / Path(path).stem, mkdir=True) if visualize else False
-            pred, seg_pred = model(img, augment=augment, visualize=visualize)
-            pred = pred[0]
-            seg_pred = seg_pred[0]
+            (pred, _), seg_pred = model(img, augment=augment, visualize=visualize)
         elif onnx:
             if dnn:
                 net.setInput(img)
@@ -195,6 +195,7 @@ def run(weights=ROOT / 'yolov5s.pt',  # model.pt path(s)
             pred = apply_classifier(pred, modelc, img, im0s)
 
         # Process predictions
+        seg_pred = segoutput_to_target(seg_pred.cpu(), size=im0s.shape[:2])
         for i, (det, seg) in enumerate(zip(pred, seg_pred)):  # per image
             seen += 1
             if webcam:  # batch_size >= 1
@@ -204,12 +205,12 @@ def run(weights=ROOT / 'yolov5s.pt',  # model.pt path(s)
 
             p = Path(p)  # to Path
             save_path = str(save_dir / p.name)  # img.jpg
-            save_seg_path = str(save_dir / p.stem) + '_seg' + ('' if dataset.mode == 'image' else f'_{frame}') + '.png'  # segimg.png
+            save_seg_path = str(save_dir / p.stem) + '_seg' + ('' if dataset.mode == 'image' else f'_{frame}') + p.suffix  # segimg.jpg
             txt_path = str(save_dir / 'labels' / p.stem) + ('' if dataset.mode == 'image' else f'_{frame}')  # img.txt
             s += '%gx%g ' % img.shape[2:]  # print string
             gn = torch.tensor(im0.shape)[[1, 0, 1, 0]]  # normalization gain whwh
             imc = im0.copy() if save_crop else im0  # for save_crop
-            imseg = np.full(img.shape[2:], 0, dtype=np.uint8)
+            imseg = np.full(im0.shape[:2], 0, dtype=np.uint8)
             annotator = Annotator(im0, line_width=line_thickness, example=str(de_names))
             seg_annotator = SegAnnotator(imseg)
             if len(det):
@@ -235,10 +236,6 @@ def run(weights=ROOT / 'yolov5s.pt',  # model.pt path(s)
                         annotator.box_label(xyxy, label, color=colors(c, True))
                         if save_crop:
                             save_one_box(xyxy, imc, file=save_dir / 'crops' / de_names[c] / f'{p.stem}.jpg', BGR=True)
-            
-            if isinstance(seg, torch.Tensor):
-                seg = seg.cpu().numpy()
-            seg_annotator.seg_label(seg)
 
             # Print time (inference-only)
             print(f'{s}Done. ({t3 - t2:.3f}s)')
@@ -252,8 +249,9 @@ def run(weights=ROOT / 'yolov5s.pt',  # model.pt path(s)
             # Save results (image with detections)
             if save_img:
                 if dataset.mode == 'image':
-                    cv2.imwrite(save_path, im0)
+                    seg_annotator.seg_label(seg)
                     seg_annotator.save(save_seg_path)
+                    cv2.imwrite(save_path, im0)
                 else:  # 'video' or 'stream'
                     if vid_path[i] != save_path:  # new video
                         vid_path[i] = save_path
