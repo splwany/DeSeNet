@@ -105,8 +105,8 @@ def create_mixed_dataloader(path, imgsz, batch_size, stride, single_cls, hyp=Non
     batch_size = min(batch_size, len(dataset))
     nw = min([NUM_THREADS, batch_size if batch_size > 1 else 0, workers])  # workers 数量
     sampler = torch_data.distributed.DistributedSampler(dataset) if rank != -1 else None
-    # loader = torch_data.DataLoader if image_weights else InfiniteDataLoader
-    loader = torch_data.DataLoader
+    loader = torch_data.DataLoader if image_weights else InfiniteDataLoader
+    # loader = torch_data.DataLoader
     # Use torch.utils.data.DataLoader() if dataset.properties will update during training else InfiniteDataLoader()
     dataloader = loader(dataset,
                         batch_size=batch_size,

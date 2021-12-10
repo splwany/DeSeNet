@@ -55,12 +55,13 @@ def seg_validation(model, n_segcls, valloader, half_precision=True):
     if half:
         model.half()
     model.eval()
-    total_inter, total_union, total_correct, total_label = 0, 0, 0, 0
+    total_inter, total_union, total_correct, total_label = np.array([0, 0]), np.array([0, 0]), 0, 0
     tbar = tqdm(valloader, desc='\r')
-    mIoU = None
+    mIoU = 0
     for i, (image, _, target, paths, _) in enumerate(tbar):
         image = image.to(device, non_blocking=True)
         image = image.half() if half else image.float()
+        image /= 255.0
         with torch.no_grad():
             correct, labeled, inter, union = eval_batch(model, image, target)
         total_correct += correct
@@ -230,6 +231,7 @@ def run(data,
         dt[2] += time_sync() - t3
 
         # Statistics per image
+        print(f'seg_out: {seg_out.shape}, {seg_out.min()}, {seg_out.max()}')
         seg_out = segoutput_to_target(seg_out, seg_targets[0].shape)
         for si, (pred, seg_pred) in enumerate(zip(out, seg_out)):
             labels = targets[targets[:, 0] == si, 1:]

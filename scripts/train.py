@@ -232,7 +232,7 @@ def train(hyp, opt, device: torch.device, callbacks):
     # Process 0
     if RANK in [-1, 0]:
         val_loader = create_mixed_dataloader(val_path, imgsz, batch_size // WORLD_SIZE, gs, single_cls,
-                                             hyp=hyp, rect=True, rank=-1,
+                                             hyp=hyp, rect=True, rank=RANK,
                                              workers=workers, pad=0.5,
                                              prefix=colorstr('val: '))[0]
         if not resume:
@@ -282,7 +282,7 @@ def train(hyp, opt, device: torch.device, callbacks):
     # Base, PSP 和 Lab 用这个，无 aux
     compute_seg_loss = SegmentationLosses()
 
-    detgain, seggain = 0.15, 0.85  # 目标检测、语义分隔 比例
+    detgain, seggain = 0.2, 1  # 目标检测、语义分隔 比例
     # CE、1/8单输入、batchsize13用0.65,0.35左右,注意64向下取整的梯度积累，比13*4=52大(12*5=64)通常应该降低分割损失比例或调小学习率
 
     LOGGER.info(f'Image sizes {imgsz} train, {imgsz} val\n'
@@ -480,7 +480,7 @@ def train(hyp, opt, device: torch.device, callbacks):
                                             callbacks=callbacks,
                                             compute_loss=compute_loss,)  # val best model with plots
 
-        callbacks.run('on_train_end', last, best, plots, epoch)
+        callbacks.run('on_train_end', last, best, plots, epoch, results)
         LOGGER.info(f"Results saved to {colorstr('bold', save_dir)}")
 
     torch.cuda.empty_cache()
@@ -493,7 +493,7 @@ def parse_opt(known=False):
     parser.add_argument('--cfg', type=str, default=ROOT / 'core/models/yolov5s_seg.yaml', help='网络模型配置文件 model.yaml 的位置')
     parser.add_argument('--data', type=str, default=ROOT / 'core/data/blind.yaml', help='data.yaml 路径')
     parser.add_argument('--hyp', type=str, default=ROOT / 'core/hyp/scratch.yaml', help='超参数路径')
-    parser.add_argument('--epochs', type=int, default=300)
+    parser.add_argument('--epochs', type=int, default=30)
     parser.add_argument('--batch-size', type=int, default=16, help='所有GPU的总batch size')
     parser.add_argument('--imgsz', '--img', '--img-size', type=int, default=640, help='train, val image size (pixels)')
     parser.add_argument('--rect', action='store_true', help='矩形训练')
@@ -514,7 +514,7 @@ def parse_opt(known=False):
     parser.add_argument('--quad', action='store_true', help='四分之一 dataloader')
     parser.add_argument('--linear-lr', action='store_true', help='linear LR')
     parser.add_argument('--label-smoothing', type=float, default=0.0, help='标签平滑的 epsilon 值')
-    parser.add_argument('--patience', type=int, default=100, help='EarlyStopping patience (epochs without improvement)')
+    parser.add_argument('--patience', type=int, default=10, help='EarlyStopping patience (epochs without improvement)')
     parser.add_argument('--freeze', type=int, default=0, help='要冻结的 layers 数. backbone=10, all=24')
     parser.add_argument('--save_period', type=int, default=-1, help='每 "save_period" 个 epoch 之后保存一次 model')
 

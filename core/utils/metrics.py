@@ -355,8 +355,8 @@ def batch_pix_accuracy(output, target):
     """
     _, predict = torch.max(output, 1)
 
-    predict = predict.cpu().numpy().astype('int64') + 1
-    target = target.cpu().numpy().astype('int64') + 1
+    predict = predict.cpu().numpy().astype('int32')
+    target = target.cpu().numpy().astype('int32')
 
     pixel_labeled = np.sum(target > 0)
     pixel_correct = np.sum((predict == target) * (target > 0))
@@ -375,16 +375,14 @@ def batch_intersection_union(output, target, nclass):
     _, predict = torch.max(output, 1)
     mini = 1
     maxi = nclass
-    nbins = nclass
-    predict = predict.cpu().numpy().astype('int64') + 1
-    target = target.cpu().numpy().astype('int64') + 1
-
-    predict = predict * (target > 0).astype(predict.dtype)
+    nbins = nclass - 1
+    predict = predict.cpu().numpy().astype('int32')
+    target = target.cpu().numpy().astype('int32')
     intersection = predict * (predict == target)
     # areas of intersection and union
-    area_inter, _ = np.histogram(intersection, bins=nbins, range=(mini, maxi))
-    area_pred, _ = np.histogram(predict, bins=nbins, range=(mini, maxi))
-    area_lab, _ = np.histogram(target, bins=nbins, range=(mini, maxi))
+    area_inter = np.histogram(intersection, bins=nbins, range=(mini, maxi))[0]
+    area_pred = np.histogram(predict, bins=nbins, range=(mini, maxi))[0]
+    area_lab = np.histogram(target, bins=nbins, range=(mini, maxi))[0]
     area_union = area_pred + area_lab - area_inter
     assert (area_inter <= area_union).all(), "Intersection area should be smaller than Union area"
     return area_inter, area_union
