@@ -217,7 +217,7 @@ class SegMaskPSP2(nn.Module):  # 自己优化的结构，移动连接顺序
         )
         
         map_reduce = 1
-        self.spatial_path = ACSP(c_hid*3, c_hid, d=[2, 3], map_reduce=map_reduce)
+        self.spatial_path = ACSP(c_hid*3, c_hid, d=[2, 3], map_reduce=map_reduce, has_global=True)
         self.context_path = nn.Sequential(
             Conv(c_hid*3, c_hid//map_reduce, k=1, s=1),
             PyramidPooling(c_hid//map_reduce, k=[1,2,3,6], short_cut=False)
@@ -474,7 +474,7 @@ def parse_model(d, ch):  # model_dict, input_channels(3)
             args.append([ch[x] for x in f])
             if isinstance(args[1], int):  # number of anchors
                 args[1] = [list(range(args[1] * 2))] * len(f)
-        elif m in [SegMaskLab, SegMaskBase, SegMaskPSP]:  # 语义分割头
+        elif m in [SegMaskLab, SegMaskBase, SegMaskPSP, SegMaskPSP2]:  # 语义分割头
             args[1] = max(round(args[1] * gd), 1) if args[1] > 1 else args[1]  # SegMask 中 C3 的 n (Lab 里用来控制 ASPP 砍多少通道)
             args[2] = make_divisible(args[2] * gw, 8)  # SegMask C3 (或其他可放缩子结构) 的输出通道数
             args.append([ch[x] for x in f])

@@ -45,7 +45,8 @@ head:
    [[-1, 10], 1, Concat, [1]],  # cat head P5
    [-1, 3, C3, [1024, False]],  # 23 (P5/32-large)
 
-   [[16, 19, 22], 1, SegMaskPSP, [se_nc, 3, 256, False]],  # 语义分割头通道配置256
+  #  [[16, 19, 22], 1, SegMaskPSP, [se_nc, 3, 256, False]],  # 语义分割头通道配置256
+   [[16, 19, 22], 1, SegMaskPSP2, [se_nc, 3, 256]],  # 自己的语义分割头
 
    [[17, 20, 23], 1, Detect, [de_nc, anchors]],  # Detect(P3, P4, P5)
   ]
