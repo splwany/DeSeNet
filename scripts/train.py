@@ -480,7 +480,7 @@ def train(hyp, opt, device: torch.device, callbacks):
                                             callbacks=callbacks,
                                             compute_loss=compute_loss,)  # val best model with plots
 
-        callbacks.run('on_train_end', last, best, plots, epoch, results)
+        callbacks.run('on_train_end', last, best, plots, epoch)
         LOGGER.info(f"Results saved to {colorstr('bold', save_dir)}")
 
     torch.cuda.empty_cache()
