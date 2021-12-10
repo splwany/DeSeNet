@@ -49,7 +49,7 @@ from core.utils.loss import ComputeLoss, SegmentationLosses
 from core.utils.metrics import fitness_det_seg
 from core.utils.mixed_datasets import (InfiniteDataLoader,
                                        create_mixed_dataloader)
-from core.utils.plots import colors, plot_images, plot_labels
+from core.utils.plots import colors, plot_images, plot_labels, plot_lr_scheduler
 from core.utils.torch_utils import (EarlyStopping, ModelEMA, de_parallel,
                                     intersect_dicts, select_device,
                                     torch_distributed_zero_first)
@@ -480,7 +480,7 @@ def train(hyp, opt, device: torch.device, callbacks):
                                             callbacks=callbacks,
                                             compute_loss=compute_loss,)  # val best model with plots
 
-        callbacks.run('on_train_end', last, best, plots, epoch, results)
+        callbacks.run('on_train_end', last, best, plots, epoch)
         LOGGER.info(f"Results saved to {colorstr('bold', save_dir)}")
 
     torch.cuda.empty_cache()
@@ -521,7 +521,7 @@ def parse_opt(known=False):
     # Weights & Biases arguments
     parser.add_argument('--entity', default='splwany', help='W&B entity')
     parser.add_argument('--upload_dataset', action='store_true', help='数据集上传到 W&B 工件表')
-    parser.add_argument('--bbox_interval', type=int, default=1, help='为 W&B 设置 bounding-box 图片打印间隔')
+    parser.add_argument('--bbox_interval', type=int, default=-1, help='为 W&B 设置 bounding-box 图片打印间隔')
     parser.add_argument('--artifact_alias', type=str, default='latest', help='要使用的数据集工件的版本')
     
     opt = parser.parse_known_args()[0] if known else parser.parse_args()

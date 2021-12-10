@@ -545,13 +545,55 @@ class RFB2(nn.Module):  # 魔改模块,除了历史遗留(改完训练模型精�
         return out
 
 
+class ACSP(nn.Module):  # 在RFB2的基础上加入PyramidPooling，并更改branch3的连接
+    def __init__(self, in_planes, out_planes, map_reduce=4, d=[2, 3], has_global=False):  # 第一个3*3的d相当于1，典型的设置1,2,3; 1,2,5; 1,3,5
+        super().__init__()
+        self.out_channels = out_planes
+        self.has_global = has_global
+        inter_planes = in_planes // map_reduce
+
+        self.branch0 = nn.Sequential(
+            Conv(in_planes, inter_planes, k=1, s=1),
+            Conv(inter_planes, inter_planes, k=3, s=1)
+        )
+        self.branch1 = nn.Sequential(
+            nn.Conv2d(inter_planes, inter_planes, kernel_size=3, stride=1, padding=d[0], dilation=d[0], bias=False),
+            nn.BatchNorm2d(inter_planes),
+            nn.SiLU()    
+        )
+        self.branch2 = nn.Sequential(
+            nn.Conv2d(inter_planes, inter_planes, kernel_size=3, stride=1, padding=d[1], dilation=d[1], bias=False),
+            nn.BatchNorm2d(inter_planes),
+            nn.SiLU()                    
+        )
+        if self.has_global:
+            self.branch_global = nn.Sequential(
+                nn.AdaptiveAvgPool2d(1),
+                Conv(inter_planes, inter_planes, k=1),
+            )
+        self.ConvLinear = Conv(int((4 if has_global else 3) * inter_planes), out_planes, k=1, s=1)
+
+    def forward(self, x):  # 思路就是rate逐渐递进的空洞卷积连续卷扩大感受野避免使用rate太大的卷积(级联注意rate要满足HDC公式且不应该有非1公倍数，空洞卷积网格效应)，多个并联获取多尺度特征
+        x0 = self.branch0(x)
+        x1 = self.branch1(x0)
+        x2 = self.branch2(x1)
+        if not self.has_global:
+            out = self.ConvLinear(torch.cat([x0,x1,x2], 1))
+        else:
+            x3 = F.interpolate(self.branch_global(x2), (x.shape[2], x.shape[3]), mode='nearest')  # 全局
+            out = self.ConvLinear(torch.cat([x0,x1,x2,x3], 1))
+        return out
+
+
 class PyramidPooling(nn.Module):
     """
     Reference:
         Zhao, Hengshuang, et al. *"Pyramid scene parsing network."*
     """
-    def __init__(self, in_channels, k=[1, 2, 3, 6]):
+    def __init__(self, in_channels, k=[1, 2, 3, 6], short_cut=False):
         super(PyramidPooling, self).__init__()
+        self.short_cut = short_cut
+        
         self.pool1 = nn.AdaptiveAvgPool2d(k[0])
         self.pool2 = nn.AdaptiveAvgPool2d(k[1])
         self.pool3 = nn.AdaptiveAvgPool2d(k[2])
@@ -570,7 +612,7 @@ class PyramidPooling(nn.Module):
         feat3 = F.interpolate(self.conv3(self.pool3(x)), (h, w), mode='bilinear', align_corners=True)
         feat4 = F.interpolate(self.conv4(self.pool4(x)), (h, w), mode='bilinear', align_corners=True)
 
-        return torch.cat((x, feat1, feat2, feat3, feat4, ), 1)
+        return torch.cat((x, feat1, feat2, feat3, feat4), 1) if self.short_cut else torch.cat((feat1, feat2, feat3, feat4), 1)
 
 
 class Focus(nn.Module):

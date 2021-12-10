@@ -219,19 +219,6 @@ def plot_one_box(x, im, color=(128, 128, 128), label=None, line_thickness=3):
 #     fig.savefig('comparison.png', dpi=200)
 
 
-def butter_lowpass_filtfilt(data, cutoff=1500, fs=50000, order=5):
-    from scipy.signal import butter, filtfilt
-
-    # https://stackoverflow.com/questions/28536191/how-to-filter-smooth-with-scipy-numpy
-    def butter_lowpass(cutoff, fs, order):
-        nyq = 0.5 * fs
-        normal_cutoff = cutoff / nyq
-        return butter(order, normal_cutoff, btype='low', analog=False)
-
-    b, a = butter_lowpass(cutoff, fs, order=order)
-    return filtfilt(b, a, data)  # forward-backward filter
-
-
 def output_to_target(output):
     # Convert model output to target format [batch_id, class_id, x, y, w, h, conf]
     targets = []

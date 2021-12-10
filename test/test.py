@@ -25,10 +25,9 @@ sys.path.append(root_path)
 from core.utils.general import generate_seg_labels_img
 from core.utils.mixed_datasets import exif_size, exif_transpose
 
-from itertools import repeat
-from torch.nn import BCELoss, BCEWithLogitsLoss, Sigmoid
 
+pred = torch.tensor([1, 1, 2, 3, 4, 3]);
 
-save_dir = Path('runs/train/first/')
-files = sorted(save_dir.glob('train*[jpg,png]'))
-print([str(f) for f in files if f.exists()])
+area_pred, area_pred_bins = np.histogram(pred, bins=4, range=(1, 4))
+print(area_pred)
+print(area_pred_bins)
