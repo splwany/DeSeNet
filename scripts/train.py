@@ -282,7 +282,7 @@ def train(hyp, opt, device: torch.device, callbacks):
     # Base, PSP 和 Lab 用这个，无 aux
     compute_seg_loss = SegmentationLosses()
 
-    detgain, seggain = 0.2, 1  # 目标检测、语义分隔 比例
+    detgain, seggain = 0.14, 1  # 目标检测、语义分隔 比例
     # CE、1/8单输入、batchsize13用0.65,0.35左右,注意64向下取整的梯度积累，比13*4=52大(12*5=64)通常应该降低分割损失比例或调小学习率
 
     LOGGER.info(f'Image sizes {imgsz} train, {imgsz} val\n'
@@ -493,7 +493,7 @@ def parse_opt(known=False):
     parser.add_argument('--cfg', type=str, default=ROOT / 'core/models/yolov5s_seg.yaml', help='网络模型配置文件 model.yaml 的位置')
     parser.add_argument('--data', type=str, default=ROOT / 'core/data/blind.yaml', help='data.yaml 路径')
     parser.add_argument('--hyp', type=str, default=ROOT / 'core/hyp/scratch.yaml', help='超参数路径')
-    parser.add_argument('--epochs', type=int, default=30)
+    parser.add_argument('--epochs', type=int, default=50)
     parser.add_argument('--batch-size', type=int, default=16, help='所有GPU的总batch size')
     parser.add_argument('--imgsz', '--img', '--img-size', type=int, default=640, help='train, val image size (pixels)')
     parser.add_argument('--rect', action='store_true', help='矩形训练')

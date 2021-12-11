@@ -490,7 +490,7 @@ class LoadImagesAndLabels(Dataset):  # for training/testing
         index = self.indices[index]  # linear, shuffled, or image_weights
 
         hyp = self.hyp
-        assert hyp is not None
+        # assert hyp is not None
         mosaic = self.mosaic and random.random() < hyp['mosaic']
         if mosaic:
             # load mosaic

@@ -216,13 +216,13 @@ class SegMaskPSP2(nn.Module):  # 自己优化的结构，移动连接顺序
             nn.Upsample(scale_factor=4, mode='bilinear', align_corners=True)
         )
         
-        map_reduce = 1
+        map_reduce = 6
         self.spatial_path = ACSP(c_hid*3, c_hid, d=[2, 3], map_reduce=map_reduce, has_global=True)
         self.context_path = nn.Sequential(
             Conv(c_hid*3, c_hid//map_reduce, k=1, s=1),
             PyramidPooling(c_hid//map_reduce, k=[1,2,3,6], short_cut=False)
         )
-        self.ffm = FFM(c_hid*2, c_hid, k=3, is_cat=True)
+        self.ffm = FFM(c_hid+c_hid//map_reduce//4*4, c_hid, k=3, is_cat=True)
         
         self.out = nn.Sequential(
             nn.Conv2d(c_hid, self.c_out, kernel_size=1, padding=0),

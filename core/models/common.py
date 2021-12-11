@@ -613,7 +613,7 @@ class PyramidPooling(nn.Module):
         feat4 = F.interpolate(self.conv4(self.pool4(x)), (h, w), mode='bilinear', align_corners=True)
 
         return torch.cat((x, feat1, feat2, feat3, feat4), 1) if self.short_cut else torch.cat((feat1, feat2, feat3, feat4), 1)
-
+    
 
 class Focus(nn.Module):
     # Focus wh information into c-space
