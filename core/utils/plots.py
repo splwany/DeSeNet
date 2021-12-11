@@ -51,17 +51,12 @@ class Colors:
 colors = Colors()  # create instance for 'from utils.plots import colors'
 
 
-def check_font(font='Arial.ttf', size=10):
+def check_font(font='wqy-microhei.ttc', size=10):
     # Return a PIL TrueType Font, downloading to CONFIG_DIR if necessary
     font = Path(font)
     font = font if font.exists() else (CONFIG_DIR / font.name)
-    try:
-        return ImageFont.truetype(str(font) if font.exists() else font.name, size)
-    except Exception as e:  # download if missing
-        url = "https://ultralytics.com/assets/" + font.name
-        print(f'Downloading {url} to {font}...')
-        torch.hub.download_url_to_file(url, str(font), progress=False)
-        return ImageFont.truetype(str(font), size)
+    assert font.exists(), f'字体 {font.name} 不在 {font.parent} 中'
+    return ImageFont.truetype(str(font) if font.exists() else font.name, size)
 
 
 class Annotator:
@@ -69,14 +64,12 @@ class Annotator:
         check_font()  # download TTF if necessary
 
     # YOLOv5 Annotator for train/val mosaics and jpgs and detect/hub inference annotations
-    def __init__(self, im, line_width=None, font_size=None, font='Arial.ttf', pil=False, example='abc'):
+    def __init__(self, im, line_width=None, font_size=None, font='wqy-microhei.ttc', pil=False, example='abc'):
         assert im.data.contiguous, 'Image not contiguous. Apply np.ascontiguousarray(im) to Annotator() input images.'
         self.pil = pil or not is_ascii(example) or is_chinese(example)
         if self.pil:  # use PIL
             self.im = im if isinstance(im, Image.Image) else Image.fromarray(im)
             self.draw = ImageDraw.Draw(self.im)
-            if is_chinese(example):
-                font = 'msyhl.ttc' if platform.system() == 'Windows' else 'wqy-microhei.ttc'
             self.font = check_font(font, size=font_size or max(round(sum(self.im.size) / 2 * 0.035), 12))
         else:  # use cv2
             self.im = im
@@ -89,14 +82,12 @@ class Annotator:
             self.draw.rectangle(box, width=self.lw, outline=color)  # box
             if label:
                 w, h = self.font.getsize(label)  # text width, height
-                outside = box[1] - h >= 0  # label fits outside box
+                outside = (box[1] - h >= 0).item()  # label fits outside box
                 self.draw.rectangle((box[0],
                                      box[1] - h if outside else box[1],
                                      box[0] + w + 1,
                                      box[1] + 1 if outside else box[1] + h + 1), fill=color)
-                self.draw.text((box[0],
-                                box[1] if outside else box[1] + h), label, fill=txt_color, font=self.font, anchor='ls')  # for PIL>8.0
-                # self.draw.text((box[0], box[1] - h if outside else box[1]), label, fill=txt_color, font=self.font)
+                self.draw.text((box[0], box[1] if outside else box[1] + h), label, fill=txt_color, font=self.font, anchor='lb')  # for PIL>8.0
         else:  # cv2
             p1, p2 = (int(box[0]), int(box[1])), (int(box[2]), int(box[3]))
             cv2.rectangle(self.im, p1, p2, color, thickness=self.lw, lineType=cv2.LINE_AA)
