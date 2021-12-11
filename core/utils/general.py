@@ -118,15 +118,15 @@ def get_latest_run(search_dir='.'):
     return max(last_list, key=os.path.getctime) if last_list else ''
 
 
-def user_config_dir(dir='Ultralytics'):
+def user_config_dir(dir='fonts'):
     # Return path of user configuration directory (make if necessary)
     system = platform.system()
     cfg = {'Windows': 'AppData/Roaming', 'Linux': '.config', 'Darwin': 'Library/Application Support'}
-    path = Path.home() / cfg.get(system, '') / dir
+    path: Path = Path.home() / cfg.get(system, '') / dir
     if system == 'Linux' and not is_writeable(path):  # GCP functions and AWS lambda solution, only /tmp is writeable
         path = Path('/tmp') / dir
     if not path.is_dir():
-        path.mkdir()  # make dir if required
+        path.mkdir(parents=True, exist_ok=True)  # make dir if required
     return path
 
 
