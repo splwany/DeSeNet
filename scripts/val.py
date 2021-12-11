@@ -231,7 +231,6 @@ def run(data,
         dt[2] += time_sync() - t3
 
         # Statistics per image
-        print(f'seg_out: {seg_out.shape}, {seg_out.min()}, {seg_out.max()}')
         seg_out = segoutput_to_target(seg_out, seg_targets[0].shape)
         for si, (pred, seg_pred) in enumerate(zip(out, seg_out)):
             labels = targets[targets[:, 0] == si, 1:]
